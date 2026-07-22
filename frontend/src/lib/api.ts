@@ -1,9 +1,9 @@
-import { z } from "zod";
 import type {
+  Account,
   ClassificationResult,
   Facility,
   FacilityCategoryId,
-  ReportType,
+  PlaceSearchResult,
   ServiceHealth,
   ServiceStats,
   UserReport,
@@ -11,6 +11,16 @@ import type {
 } from "@/types/domain";
 
 const API_BASE_URL = (process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:4000").replace(/\/$/, "");
+
+function apiBaseUrl() {
+  if (typeof window === "undefined") return API_BASE_URL;
+  const url = new URL(API_BASE_URL);
+  const localHosts = ["localhost", "127.0.0.1"];
+  if (localHosts.includes(url.hostname) && localHosts.includes(window.location.hostname)) {
+    url.hostname = window.location.hostname;
+  }
+  return url.toString().replace(/\/$/, "");
+}
 
 export class ApiError extends Error {
   constructor(
@@ -33,8 +43,9 @@ interface ErrorPayload {
 async function apiRequest<T>(path: string, init?: RequestInit) {
   let response: Response;
   try {
-    response = await fetch(`${API_BASE_URL}${path}`, {
+    response = await fetch(`${apiBaseUrl()}${path}`, {
       ...init,
+      credentials: "include",
       headers: {
         Accept: "application/json",
         ...(init?.body ? { "Content-Type": "application/json" } : {}),
@@ -42,7 +53,7 @@ async function apiRequest<T>(path: string, init?: RequestInit) {
       },
     });
   } catch {
-    throw new ApiError("API 서버에 연결할 수 없습니다.", 0, "NETWORK_ERROR");
+    throw new ApiError("현재 서비스를 이용할 수 없습니다. 잠시 후 다시 시도해 주세요.", 0, "NETWORK_ERROR");
   }
 
   const payload = await response.json().catch(() => ({})) as T & ErrorPayload;
@@ -93,6 +104,16 @@ export async function fetchFacility(id: string) {
   return response.facility;
 }
 
+export async function searchPlaces(query: string, location?: { latitude: number; longitude: number } | null) {
+  const params = new URLSearchParams({ query });
+  if (location) {
+    params.set("latitude", String(location.latitude));
+    params.set("longitude", String(location.longitude));
+  }
+  const response = await apiRequest<{ results: PlaceSearchResult[] }>(`/api/places?${params.toString()}`);
+  return response.results;
+}
+
 export async function fetchWasteItems() {
   const response = await apiRequest<{ items: WasteItem[] }>("/api/waste-items?limit=20");
   return response.items;
@@ -106,38 +127,52 @@ export async function classifyWaste(query: string) {
   return response.results;
 }
 
-export const reportSchema = z.object({
-  facilityId: z.string().regex(/^\d+$/, "장소를 선택해 주세요."),
-  deviceId: z.string().uuid(),
-  type: z.enum(["full", "missing", "broken", "location", "info"]),
-  content: z.string().trim().min(5, "상황을 5자 이상 적어 주세요.").max(300, "내용은 300자까지 입력할 수 있어요."),
-});
-
-export interface ReportInput {
-  facilityId: string;
-  deviceId: string;
-  type: ReportType;
-  content: string;
-}
-
-export async function submitReport(input: ReportInput) {
-  const parsed = reportSchema.parse(input);
-  const response = await apiRequest<{ report: UserReport }>("/api/reports", {
-    method: "POST",
-    body: JSON.stringify(parsed),
-  });
-  return response.report;
-}
-
-export async function fetchReports(deviceId: string) {
-  const response = await apiRequest<{ reports: UserReport[] }>(`/api/reports/${encodeURIComponent(deviceId)}`);
-  return response.reports;
-}
-
 export async function fetchStats() {
   return apiRequest<ServiceStats>("/api/stats");
 }
 
 export async function fetchHealth() {
   return apiRequest<ServiceHealth>("/health");
+}
+
+export async function fetchCurrentAccount() {
+  const response = await apiRequest<{ user: Account | null }>("/api/auth/me");
+  return response.user;
+}
+
+export async function registerAccount(input: { name: string; email: string; password: string }) {
+  const response = await apiRequest<{ user: Account }>("/api/auth/register", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+  return response.user;
+}
+
+export async function loginAccount(input: { email: string; password: string }) {
+  const response = await apiRequest<{ user: Account }>("/api/auth/login", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+  return response.user;
+}
+
+export async function logoutAccount() {
+  await apiRequest("/api/auth/logout", { method: "POST" });
+}
+
+export async function fetchReports() {
+  const response = await apiRequest<{ reports: UserReport[] }>("/api/reports");
+  return response.reports;
+}
+
+export async function submitReport(input: {
+  facilityId: string;
+  reportType: UserReport["reportType"];
+  content: string;
+}) {
+  const response = await apiRequest<{ report: UserReport }>("/api/reports", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+  return response.report;
 }

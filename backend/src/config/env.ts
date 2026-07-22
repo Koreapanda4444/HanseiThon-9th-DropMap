@@ -38,6 +38,8 @@ const schema = z.object({
   ORACLE_POOL_INCREMENT: numberWithDefault(1, 1),
   KAKAO_REST_API_KEY: optionalText,
   KAKAO_NATIVE_APP_KEY: optionalText,
+  PUBLIC_DATA_SERVICE_KEY: optionalText,
+  LOCAL_ACCOUNT_FILE: optionalText,
 });
 
 export const env = schema.parse(process.env);
@@ -50,7 +52,7 @@ export const oracleConfigured = Boolean(
 );
 
 export const oracleConnectString = env.ORACLE_HOST && env.ORACLE_SERVICE_NAME
-  ? `${env.ORACLE_HOST}:${env.ORACLE_PORT}/${env.ORACLE_SERVICE_NAME}`
+  ? `(DESCRIPTION=(CONNECT_TIMEOUT=5)(TRANSPORT_CONNECT_TIMEOUT=3)(RETRY_COUNT=0)(ADDRESS=(PROTOCOL=TCP)(HOST=${env.ORACLE_HOST})(PORT=${env.ORACLE_PORT}))(CONNECT_DATA=(SERVICE_NAME=${env.ORACLE_SERVICE_NAME})))`
   : "";
 
 export const corsOrigins = env.CORS_ORIGIN

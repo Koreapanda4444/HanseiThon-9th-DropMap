@@ -1,13 +1,17 @@
 import type { FastifyInstance } from "fastify";
-import { checkDatabase } from "../database/oracle.js";
+import { getDataSourceStatus } from "../services/data-source.js";
 
 export async function healthRoutes(app: FastifyInstance) {
   app.get("/health", async () => {
-    const database = await checkDatabase();
+    const dataSource = await getDataSourceStatus();
     return {
-      status: database.connected ? "ok" : "degraded",
+      status: dataSource.available ? "ok" : "degraded",
       service: "beoril-map-api",
-      database,
+      dataSource: {
+        mode: dataSource.mode,
+        available: dataSource.available,
+      },
+      database: dataSource.database,
       timestamp: new Date().toISOString(),
     };
   });

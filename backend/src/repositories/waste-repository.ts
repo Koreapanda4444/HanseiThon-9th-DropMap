@@ -1,5 +1,7 @@
 import { withConnection } from "../database/oracle.js";
+import { classifyLocalWaste, findLocalWasteItems } from "../data-import/local-store.js";
 import { facilityCategoryIds, type ClassificationResult, type FacilityCategoryId, type WasteItem } from "../domain.js";
+import { runWithDataSource } from "../services/data-source.js";
 
 interface WasteItemRow {
   id: string;
@@ -40,7 +42,7 @@ const wasteItemSelect = `
     wi.category_id "categoryId",
     wi.disposal_tip "disposalTip"`;
 
-export async function findWasteItems(query?: string, limit = 100) {
+async function findOracleWasteItems(query?: string, limit = 100) {
   const where = query
     ? `AND (
       INSTR(LOWER(wi.name), LOWER(:query)) > 0
@@ -65,7 +67,7 @@ export async function findWasteItems(query?: string, limit = 100) {
     .filter((item): item is WasteItem => item !== null);
 }
 
-export async function classifyWaste(query: string) {
+async function classifyOracleWaste(query: string) {
   const result = await withConnection((connection) => connection.execute(
     `SELECT * FROM (
       ${wasteItemSelect},
@@ -109,4 +111,18 @@ export async function classifyWaste(query: string) {
       disposalTip: item.disposalTip,
     }];
   });
+}
+
+export function findWasteItems(query?: string, limit = 100) {
+  return runWithDataSource(
+    () => findOracleWasteItems(query, limit),
+    () => findLocalWasteItems(query, limit),
+  );
+}
+
+export function classifyWaste(query: string) {
+  return runWithDataSource(
+    () => classifyOracleWaste(query),
+    () => classifyLocalWaste(query),
+  );
 }

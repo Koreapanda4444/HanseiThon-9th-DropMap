@@ -1,6 +1,7 @@
 import {
   BatteryCharging,
   Cigarette,
+  PlugZap,
   Pill,
   Recycle,
   Shirt,
@@ -16,6 +17,7 @@ const ICONS = {
   battery: BatteryCharging,
   clothes: Shirt,
   cigarette: Cigarette,
+  electronics: PlugZap,
 } satisfies Record<FacilityCategoryId, React.ComponentType<LucideProps>>;
 
 export function CategoryIcon({ categoryId, ...props }: LucideProps & { categoryId: FacilityCategoryId }) {

@@ -1,32 +1,46 @@
+import { randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { createReport, findReportsByDevice } from "../repositories/report-repository.js";
+import { reportTypes } from "../domain.js";
+import { AppError } from "../errors.js";
+import { findFacilityById } from "../repositories/facility-repository.js";
+import { createReport, listReports } from "../repositories/report-repository.js";
+import { requireAccount } from "../services/auth-service.js";
 
-const reportTypes = ["full", "missing", "broken", "location", "info"] as const;
-
-const createSchema = z.object({
+const reportSchema = z.object({
   facilityId: z.coerce.number().int().positive(),
-  deviceId: z.string().uuid(),
-  type: z.enum(reportTypes),
-  content: z.string().trim().min(5).max(300),
+  reportType: z.enum(reportTypes),
+  content: z.string().trim().min(5).max(1000),
 });
 
-const listSchema = z.object({
-  deviceId: z.string().uuid(),
-  limit: z.coerce.number().int().min(1).max(100).default(50),
-});
+async function withFacilityName(report: Awaited<ReturnType<typeof createReport>>) {
+  const facility = await findFacilityById(Number(report.facilityId));
+  return { ...report, facilityName: facility?.name ?? "등록 시설" };
+}
 
 export async function reportRoutes(app: FastifyInstance) {
   app.post("/api/reports", async (request, reply) => {
-    const input = createSchema.parse(request.body);
-    const report = await createReport(input);
-    return reply.status(201).send({ report });
+    const account = await requireAccount(request);
+    const input = reportSchema.parse(request.body);
+    const facility = await findFacilityById(input.facilityId);
+    if (!facility) throw new AppError("시설을 찾을 수 없습니다.", 404, "FACILITY_NOT_FOUND");
+    const now = new Date().toISOString();
+    const report = await createReport({
+      id: randomUUID(),
+      userId: account.id,
+      facilityId: String(input.facilityId),
+      reportType: input.reportType,
+      content: input.content,
+      status: "received",
+      createdAt: now,
+      updatedAt: now,
+    });
+    return reply.status(201).send({ report: { ...report, facilityName: facility.name } });
   });
 
-  app.get("/api/reports/:deviceId", async (request) => {
-    const params = z.object({ deviceId: z.string().uuid() }).parse(request.params);
-    const query = z.object({ limit: z.coerce.number().int().min(1).max(100).default(50) }).parse(request.query);
-    const input = listSchema.parse({ ...params, ...query });
-    return { reports: await findReportsByDevice(input.deviceId, input.limit) };
+  app.get("/api/reports", async (request) => {
+    const account = await requireAccount(request);
+    const reports = await listReports(account.id);
+    return { reports: await Promise.all(reports.map(withFacilityName)) };
   });
 }

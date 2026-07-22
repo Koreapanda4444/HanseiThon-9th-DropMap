@@ -1,78 +1,95 @@
-import oracledb from "oracledb";
+import { mutateLocalAccountData, readLocalAccountData } from "../data-import/local-account-store.js";
 import { withConnection } from "../database/oracle.js";
-import type { ReportStatus, ReportType, UserReport } from "../domain.js";
+import type { UserReport } from "../domain.js";
+import { runWithDataSource } from "../services/data-source.js";
 
 interface ReportRow {
-  id: number | string;
+  id: string;
+  userId: string;
   facilityId: number | string;
-  facilityName: string;
-  type: ReportType;
+  reportType: UserReport["reportType"];
   content: string;
+  status: UserReport["status"];
   createdAt: Date | string;
-  status: ReportStatus;
+  updatedAt: Date | string;
 }
 
 function toReport(row: ReportRow): UserReport {
-  const createdAt = row.createdAt instanceof Date ? row.createdAt : new Date(row.createdAt);
   return {
     id: String(row.id),
+    userId: row.userId,
     facilityId: String(row.facilityId),
-    facilityName: row.facilityName,
-    type: row.type,
+    reportType: row.reportType,
     content: row.content,
-    createdAt: createdAt.toISOString(),
     status: row.status,
+    createdAt: (row.createdAt instanceof Date ? row.createdAt : new Date(row.createdAt)).toISOString(),
+    updatedAt: (row.updatedAt instanceof Date ? row.updatedAt : new Date(row.updatedAt)).toISOString(),
   };
 }
 
-const reportSelect = `
-  SELECT
-    ur.id "id",
-    ur.facility_id "facilityId",
-    f.name "facilityName",
-    ur.report_type "type",
-    ur.content "content",
-    ur.created_at "createdAt",
-    ur.status "status"
-  FROM user_reports ur
-  JOIN facilities f ON f.id = ur.facility_id`;
+async function createOracleReport(report: UserReport) {
+  await withConnection(async (connection) => {
+    await connection.execute(`
+      INSERT INTO user_reports (
+        id, facility_id, user_id, report_type, content, status, created_at, updated_at
+      ) VALUES (
+        :id, :facilityId, :userId, :reportType, :content, :status, :createdAt, :updatedAt
+      )
+    `, {
+      ...report,
+      facilityId: Number(report.facilityId),
+      createdAt: new Date(report.createdAt),
+      updatedAt: new Date(report.updatedAt),
+    });
+    await connection.commit();
+  });
+  return report;
+}
 
-export async function createReport(input: {
-  facilityId: number;
-  deviceId: string;
-  type: ReportType;
-  content: string;
-}) {
+async function listOracleReports(userId: string) {
   return withConnection(async (connection) => {
-    const result = await connection.execute(
-      `INSERT INTO user_reports (facility_id, device_id, report_type, content)
-       VALUES (:facilityId, :deviceId, :type, :content)
-       RETURNING id INTO :id`,
-      {
-        ...input,
-        id: { dir: oracledb.BIND_OUT, type: oracledb.NUMBER },
-      },
-      { autoCommit: true },
-    );
-    const outBinds = result.outBinds as { id: number | number[] };
-    const id = Array.isArray(outBinds.id) ? outBinds.id[0] : outBinds.id;
-    const created = await connection.execute(
-      `${reportSelect} WHERE ur.id = :id`,
-      { id },
-    );
-    const row = created.rows?.[0] as ReportRow | undefined;
-    if (!row) throw new Error("Created report could not be loaded");
-    return toReport(row);
+    const result = await connection.execute<ReportRow>(`
+      SELECT
+        id "id",
+        user_id "userId",
+        facility_id "facilityId",
+        report_type "reportType",
+        content "content",
+        status "status",
+        created_at "createdAt",
+        updated_at "updatedAt"
+      FROM user_reports
+      WHERE user_id = :userId
+      ORDER BY created_at DESC
+    `, { userId });
+    return (result.rows ?? []).map(toReport);
   });
 }
 
-export async function findReportsByDevice(deviceId: string, limit = 50) {
-  const result = await withConnection((connection) => connection.execute(
-    `${reportSelect}
-     WHERE ur.device_id = :deviceId
-     ORDER BY ur.created_at DESC
-     FETCH FIRST ${limit} ROWS ONLY`,
-    { deviceId },
-  ));
-  return ((result.rows ?? []) as ReportRow[]).map(toReport);
+function createLocalReport(report: UserReport) {
+  return mutateLocalAccountData((data) => {
+    data.reports.push({ ...report });
+    return report;
+  });
+}
+
+function listLocalReports(userId: string) {
+  return readLocalAccountData((data) => data.reports
+    .filter((report) => report.userId === userId)
+    .sort((first, second) => Date.parse(second.createdAt) - Date.parse(first.createdAt))
+    .map((report) => ({ ...report })));
+}
+
+export function createReport(report: UserReport) {
+  return runWithDataSource(
+    () => createOracleReport(report),
+    () => createLocalReport(report),
+  );
+}
+
+export function listReports(userId: string) {
+  return runWithDataSource(
+    () => listOracleReports(userId),
+    () => listLocalReports(userId),
+  );
 }

@@ -1,6 +1,12 @@
 import type { BindParameters, Connection } from "oracledb";
+import {
+  findLocalFacilities,
+  findLocalFacilityById,
+  getLocalFacilityStats,
+} from "../data-import/local-store.js";
 import { withConnection } from "../database/oracle.js";
 import { facilityCategoryIds, type Facility, type FacilityCategoryId, type FacilityStatus } from "../domain.js";
+import { runWithDataSource } from "../services/data-source.js";
 
 interface FacilityRow {
   id: number | string;
@@ -33,7 +39,7 @@ export interface FacilityFilters {
   south?: number | undefined;
   east?: number | undefined;
   north?: number | undefined;
-  limit: number;
+  limit?: number | undefined;
 }
 
 const statusLabels: Record<FacilityStatus, string> = {
@@ -113,7 +119,7 @@ async function executeFacilities(
   return ((result.rows ?? []) as FacilityRow[]).map(toFacility);
 }
 
-export async function findFacilities(filters: FacilityFilters) {
+async function findOracleFacilities(filters: FacilityFilters) {
   const conditions: string[] = [];
   const binds: Record<string, string | number | undefined> = {};
   const hasLocation = filters.latitude !== undefined && filters.longitude !== undefined;
@@ -189,16 +195,17 @@ export async function findFacilities(filters: FacilityFilters) {
 
   const where = conditions.length ? `WHERE ${conditions.join("\nAND ")}` : "";
   const order = hasLocation ? `ORDER BY "distanceM" NULLS LAST, f.name` : "ORDER BY f.updated_at DESC, f.name";
+  const rowLimit = filters.limit ? `FETCH FIRST ${filters.limit} ROWS ONLY` : "";
   const sql = `${baseSelect}${distanceSelect}
     FROM facilities f
     ${where}
     ${order}
-    FETCH FIRST ${filters.limit} ROWS ONLY`;
+    ${rowLimit}`;
 
   return withConnection((connection) => executeFacilities(connection, sql, binds));
 }
 
-export async function findFacilityById(id: number) {
+async function findOracleFacilityById(id: number) {
   const sql = `${baseSelect}, CAST(NULL AS NUMBER) "distanceM"
     FROM facilities f
     WHERE f.id = :id`;
@@ -206,7 +213,7 @@ export async function findFacilityById(id: number) {
   return facilities[0] ?? null;
 }
 
-export async function getFacilityStats() {
+async function getOracleFacilityStats() {
   return withConnection(async (connection) => {
     const result = await connection.execute(`
       SELECT
@@ -220,4 +227,22 @@ export async function getFacilityStats() {
     };
     return { facilities: Number(row.facilities), sources: Number(row.sources) };
   });
+}
+
+export function findFacilities(filters: FacilityFilters) {
+  return runWithDataSource(
+    () => findOracleFacilities(filters),
+    () => findLocalFacilities(filters),
+  );
+}
+
+export function findFacilityById(id: number) {
+  return runWithDataSource(
+    () => findOracleFacilityById(id),
+    () => findLocalFacilityById(id),
+  );
+}
+
+export function getFacilityStats() {
+  return runWithDataSource(getOracleFacilityStats, getLocalFacilityStats);
 }

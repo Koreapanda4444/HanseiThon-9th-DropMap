@@ -1,0 +1,88 @@
+import type { WasteItem } from "../domain.js";
+
+export const wasteCatalog = [
+  {
+    id: "general-waste",
+    name: "일반쓰레기",
+    aliases: ["종량제", "생활쓰레기", "생활폐기물"],
+    categoryId: "general",
+    disposalTip: "재활용이 어려운 생활폐기물은 지역 규정에 맞는 종량제 봉투에 담아 배출해 주세요.",
+  },
+  {
+    id: "plastic",
+    name: "플라스틱",
+    aliases: ["페트병", "투명 페트병", "PET", "플라스틱 용기"],
+    categoryId: "recycle",
+    disposalTip: "내용물을 비우고 깨끗이 헹군 뒤 라벨과 뚜껑을 분리해 재활용품 수거함에 배출해 주세요.",
+  },
+  {
+    id: "paper",
+    name: "종이",
+    aliases: ["박스", "골판지", "신문", "종이상자"],
+    categoryId: "recycle",
+    disposalTip: "테이프와 비닐 등 이물질을 제거하고 물기에 젖지 않도록 펼치거나 묶어서 배출해 주세요.",
+  },
+  {
+    id: "metal-can",
+    name: "캔",
+    aliases: ["알루미늄 캔", "철 캔", "고철", "금속"],
+    categoryId: "recycle",
+    disposalTip: "내용물을 비우고 헹군 뒤 플라스틱 뚜껑 등 다른 재질을 분리해 배출해 주세요.",
+  },
+  {
+    id: "glass-bottle",
+    name: "유리병",
+    aliases: ["빈 병", "음료수병", "주류병"],
+    categoryId: "recycle",
+    disposalTip: "내용물을 비우고 헹군 뒤 뚜껑을 분리해 유리병 수거함에 배출해 주세요.",
+  },
+  {
+    id: "medicine",
+    name: "폐의약품",
+    aliases: ["남은 약", "알약", "감기약", "시럽약", "연고", "약"],
+    categoryId: "medicine",
+    disposalTip: "포장재를 가능한 범위에서 분리하고 약국이나 보건소 등 폐의약품 수거함에 배출해 주세요.",
+  },
+  {
+    id: "battery",
+    name: "폐건전지",
+    aliases: ["건전지", "배터리", "AA 건전지", "AAA 건전지"],
+    categoryId: "battery",
+    disposalTip: "다른 폐기물과 섞지 말고 공동주택이나 주민센터 등의 폐건전지 수거함에 배출해 주세요.",
+  },
+  {
+    id: "portable-battery",
+    name: "보조배터리",
+    aliases: ["휴대용 배터리", "리튬 배터리", "충전 배터리"],
+    categoryId: "battery",
+    disposalTip: "화재 위험이 있으므로 일반쓰레기나 재활용품에 넣지 말고 전용 수거함에 배출해 주세요.",
+  },
+  {
+    id: "fluorescent-lamp",
+    name: "폐형광등",
+    aliases: ["형광등", "전구", "폐전구", "LED 전구"],
+    categoryId: "battery",
+    disposalTip: "깨지지 않게 포장하거나 원형을 유지한 채 폐형광등 전용 수거함에 배출해 주세요.",
+  },
+  {
+    id: "clothes",
+    name: "헌옷",
+    aliases: ["의류", "옷", "신발", "가방"],
+    categoryId: "clothes",
+    disposalTip: "재사용 가능한 의류는 깨끗하고 마른 상태로 의류 수거함에 배출해 주세요.",
+  },
+  {
+    id: "cigarette-butt",
+    name: "담배꽁초",
+    aliases: ["꽁초", "담배"],
+    categoryId: "cigarette",
+    disposalTip: "불씨를 완전히 끈 뒤 담배꽁초 전용 수거함이나 지정된 일반쓰레기 수거함에 배출해 주세요.",
+  },
+  {
+    id: "small-electronics",
+    name: "중소형 폐가전",
+    aliases: ["소형가전", "폐가전", "전자제품", "전기제품", "선풍기", "청소기", "프린터"],
+    categoryId: "electronics",
+    disposalTip: "배터리를 분리할 수 있다면 따로 분리하고 중소형 폐가전 수거함이나 지역 무상수거 서비스를 이용해 주세요.",
+  },
+] satisfies WasteItem[];

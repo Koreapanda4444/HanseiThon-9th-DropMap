@@ -4,11 +4,11 @@ export type FacilityCategoryId =
   | "medicine"
   | "battery"
   | "clothes"
-  | "cigarette";
+  | "cigarette"
+  | "electronics";
 
 export type FacilityStatus = "available" | "busy" | "unavailable";
 export type ReportType = "full" | "missing" | "broken" | "location" | "info";
-export type ReportStatus = "received" | "reviewing" | "resolved";
 
 export interface FacilityCategory {
   id: FacilityCategoryId;
@@ -57,14 +57,19 @@ export interface ClassificationResult {
   disposalTip: string;
 }
 
-export interface UserReport {
+export interface PlaceSearchResult {
   id: string;
-  facilityId: string;
-  facilityName: string;
-  type: ReportType;
-  content: string;
-  createdAt: string;
-  status: ReportStatus;
+  name: string;
+  category: string;
+  categoryGroup: string;
+  address: string;
+  roadAddress: string | null;
+  phone: string | null;
+  distanceM: number | null;
+  coordinates: {
+    latitude: number;
+    longitude: number;
+  };
 }
 
 export interface ServiceStats {
@@ -75,10 +80,34 @@ export interface ServiceStats {
 export interface ServiceHealth {
   status: "ok" | "degraded";
   service: string;
+  dataSource: {
+    mode: "oracle" | "local" | "unavailable";
+    available: boolean;
+  };
   database: {
     configured: boolean;
     connected: boolean;
     state: "unconfigured" | "disconnected" | "connected";
   };
   timestamp: string;
+}
+
+export interface Account {
+  id: string;
+  email: string;
+  name: string;
+  createdAt: string;
+}
+
+export type ReportStatus = "received" | "reviewing" | "resolved";
+
+export interface UserReport {
+  id: string;
+  facilityId: string;
+  facilityName: string;
+  reportType: ReportType;
+  content: string;
+  status: ReportStatus;
+  createdAt: string;
+  updatedAt: string;
 }

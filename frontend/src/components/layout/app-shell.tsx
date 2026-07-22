@@ -1,12 +1,10 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { Bookmark, Map, Menu, Search, Send } from "lucide-react";
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
 import { BrandMark } from "@/components/ui/brand-mark";
-import { fetchHealth } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 const NAV_ITEMS = [
@@ -25,13 +23,6 @@ function isActive(pathname: string, href: string) {
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const hideNavigation = pathname.startsWith("/directions/");
-  const healthQuery = useQuery({
-    queryKey: ["service-health"],
-    queryFn: fetchHealth,
-    staleTime: 60_000,
-    retry: false,
-  });
-  const databaseConnected = healthQuery.data?.database.connected === true;
 
   return (
     <div className="min-h-dvh bg-[var(--app-bg)]">
@@ -51,10 +42,6 @@ export function AppShell({ children }: { children: ReactNode }) {
                 );
               })}
             </nav>
-            <div className="flex items-center gap-2 rounded-full bg-[var(--surface-muted)] py-1.5 pl-2 pr-3 text-[12px] font-bold text-[var(--sub)]">
-              <span className={cn("size-2 rounded-full", databaseConnected ? "bg-[var(--brand)]" : "bg-amber-400")} />
-              {healthQuery.isPending ? "API 확인 중" : databaseConnected ? "Oracle 연결됨" : "Oracle 설정 필요"}
-            </div>
           </div>
         </header>
       )}

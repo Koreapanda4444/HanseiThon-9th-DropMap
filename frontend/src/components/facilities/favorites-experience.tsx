@@ -1,7 +1,7 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { Bookmark, Map, Search, Sparkles, TriangleAlert } from "lucide-react";
+import { Bookmark, Map, Search, TriangleAlert } from "lucide-react";
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { FacilityCard } from "@/components/facilities/facility-card";
@@ -14,7 +14,7 @@ export function FavoritesExperience() {
   const [query, setQuery] = useState("");
   const facilitiesQuery = useQuery({
     queryKey: ["favorite-facilities", favoriteIds],
-    queryFn: () => fetchFacilities({ ids: favoriteIds, limit: 100 }),
+    queryFn: () => fetchFacilities({ ids: favoriteIds }),
     enabled: favoriteIds.length > 0,
   });
   const favorites = useMemo(() => {
@@ -47,14 +47,13 @@ export function FavoritesExperience() {
           </section>
         ) : favoriteIds.length > 0 ? (
           <div className="mt-6 rounded-[26px] border border-[var(--line)] bg-white px-5 py-16 text-center">
-            <Search className="mx-auto size-8 text-[#a3ada8]" /><h2 className="mt-4 text-[17px] font-black">표시할 장소가 없습니다.</h2><p className="mt-1 text-[13px] text-[var(--sub)]">검색어를 지우거나 최신 시설 데이터를 다시 확인해 주세요.</p>
+            <Search className="mx-auto size-8 text-[#a3ada8]" /><h2 className="mt-4 text-[17px] font-black">표시할 장소가 없습니다.</h2><p className="mt-1 text-[13px] text-[var(--sub)]">검색 조건과 일치하는 저장 장소가 없습니다.</p>
           </div>
         ) : (
           <div className="mt-6 overflow-hidden rounded-[28px] border border-[var(--line)] bg-white px-5 py-14 text-center">
             <span className="mx-auto grid size-16 place-items-center rounded-[22px] bg-[var(--brand-soft)] text-[var(--brand-deep)]"><Bookmark className="size-7" /></span>
             <h2 className="mt-5 text-[20px] font-black tracking-[-0.04em]">아직 저장한 장소가 없어요</h2>
-            <p className="mx-auto mt-2 max-w-sm text-[13px] leading-6 text-[var(--sub)]">시설 카드의 저장 아이콘을 누르면 다음에도 빠르게 찾을 수 있어요.</p>
-            <Link href="/" className="mt-6 inline-flex h-12 items-center gap-2 rounded-2xl bg-[var(--brand)] px-5 text-[13px] font-extrabold text-white"><Sparkles className="size-4" /> 주변 수거함 둘러보기</Link>
+            <Link href="/" className="mt-6 inline-flex h-11 items-center gap-2 rounded-xl bg-[var(--brand)] px-5 text-[12px] font-extrabold text-white"><Map className="size-4" /> 지도에서 찾기</Link>
           </div>
         )}
       </div>

@@ -12,7 +12,7 @@ let connectionState: "unconfigured" | "disconnected" | "connected" = oracleConfi
 async function createPool() {
   if (!oracleConfigured) {
     throw new AppError(
-      "Oracle 접속 정보가 설정되지 않았습니다.",
+      "현재 데이터를 불러오지 못했습니다.",
       503,
       "DATABASE_NOT_CONFIGURED",
     );
@@ -38,7 +38,7 @@ async function getPool() {
   } catch (error) {
     if (error instanceof AppError) throw error;
     connectionState = "disconnected";
-    throw new AppError("Oracle 데이터베이스에 연결할 수 없습니다.", 503, "DATABASE_UNAVAILABLE");
+    throw new AppError("현재 데이터를 불러오지 못했습니다.", 503, "DATABASE_UNAVAILABLE");
   }
 }
 

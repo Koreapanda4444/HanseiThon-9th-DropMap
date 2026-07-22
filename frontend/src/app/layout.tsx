@@ -1,22 +1,15 @@
 import type { Metadata, Viewport } from "next";
 import { AppShell } from "@/components/layout/app-shell";
 import { Providers } from "@/components/providers";
-import { PwaRegister } from "@/components/pwa-register";
 import "./globals.css";
 
 export const metadata: Metadata = {
   title: { default: "버릴지도", template: "%s | 버릴지도" },
   description: "버릴 물건을 검색하고 내 주변 수거함을 한눈에 찾는 지도 서비스",
   applicationName: "버릴지도",
-  manifest: "/manifest.webmanifest",
-  appleWebApp: {
-    capable: true,
-    statusBarStyle: "default",
-    title: "버릴지도",
-  },
   icons: {
-    icon: "/icons/app-icon.svg",
-    apple: "/icons/app-icon.svg",
+    icon: "/assets/brand-symbol.png",
+    apple: "/assets/brand-symbol.png",
   },
 };
 
@@ -34,7 +27,6 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
       <body>
         <Providers>
           <AppShell>{children}</AppShell>
-          <PwaRegister />
         </Providers>
       </body>
     </html>

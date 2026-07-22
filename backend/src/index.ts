@@ -1,7 +1,9 @@
 import { buildApp } from "./app.js";
 import { env } from "./config/env.js";
 import { closeDatabase } from "./database/oracle.js";
+import { initializeDataSource } from "./services/data-source.js";
 
+await initializeDataSource();
 const app = await buildApp();
 
 async function shutdown() {

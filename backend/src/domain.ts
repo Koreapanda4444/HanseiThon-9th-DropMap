@@ -5,12 +5,11 @@ export const facilityCategoryIds = [
   "battery",
   "clothes",
   "cigarette",
+  "electronics",
 ] as const;
 
 export type FacilityCategoryId = typeof facilityCategoryIds[number];
 export type FacilityStatus = "available" | "busy" | "unavailable";
-export type ReportType = "full" | "missing" | "broken" | "location" | "info";
-export type ReportStatus = "received" | "reviewing" | "resolved";
 
 export interface Facility {
   id: string;
@@ -51,12 +50,24 @@ export interface ClassificationResult {
   disposalTip: string;
 }
 
+export interface Account {
+  id: string;
+  email: string;
+  name: string;
+  createdAt: string;
+}
+
+export const reportTypes = ["full", "missing", "broken", "location", "info"] as const;
+export type ReportType = typeof reportTypes[number];
+export type ReportStatus = "received" | "reviewing" | "resolved";
+
 export interface UserReport {
   id: string;
+  userId: string;
   facilityId: string;
-  facilityName: string;
-  type: ReportType;
+  reportType: ReportType;
   content: string;
-  createdAt: string;
   status: ReportStatus;
+  createdAt: string;
+  updatedAt: string;
 }

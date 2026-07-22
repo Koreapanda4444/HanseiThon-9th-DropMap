@@ -3,6 +3,7 @@ import Fastify from "fastify";
 import { ZodError } from "zod";
 import { corsOrigins } from "./config/env.js";
 import { AppError } from "./errors.js";
+import { authRoutes } from "./routes/auth.js";
 import { facilityRoutes } from "./routes/facilities.js";
 import { healthRoutes } from "./routes/health.js";
 import { kakaoRoutes } from "./routes/kakao.js";
@@ -20,6 +21,7 @@ export async function buildApp() {
       }
       callback(new Error("Origin not allowed"), false);
     },
+    credentials: true,
   });
 
   app.setErrorHandler((error, request, reply) => {
@@ -52,6 +54,7 @@ export async function buildApp() {
   });
 
   await app.register(healthRoutes);
+  await app.register(authRoutes);
   await app.register(facilityRoutes);
   await app.register(wasteRoutes);
   await app.register(reportRoutes);

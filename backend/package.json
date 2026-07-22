@@ -10,10 +10,13 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "data:check": "tsx src/data-import/cli.ts --dry-run --skip-openapi --skip-geocoding",
+    "data:import": "tsx src/data-import/cli.ts"
   },
   "dependencies": {
     "@fastify/cors": "^11.1.0",
+    "csv-parse": "^6.1.0",
     "dotenv": "^17.2.3",
     "fastify": "^5.6.2",
     "oracledb": "^6.10.0",

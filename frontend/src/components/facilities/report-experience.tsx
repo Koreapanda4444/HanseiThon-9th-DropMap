@@ -1,138 +1,178 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Camera, Check, ChevronRight, CircleDot, Clock3, ImagePlus, LoaderCircle, MapPin, Send, ShieldCheck, TriangleAlert } from "lucide-react";
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { CheckCircle2, Clock3, LockKeyhole, MapPin, Search, Send, TriangleAlert, X } from "lucide-react";
+import Link from "next/link";
+import { useMemo, useState, type FormEvent } from "react";
+import { CategoryIcon } from "@/components/ui/category-icon";
 import { PageHeader } from "@/components/ui/page-header";
-import { REPORT_STATUS_LABELS, REPORT_TYPE_BY_ID, REPORT_TYPES } from "@/config/reports";
-import { fetchFacilities, fetchReports, reportSchema, submitReport } from "@/lib/api";
-import { getOrCreateDeviceId } from "@/lib/device";
+import { getPrimaryCategory } from "@/config/facility-categories";
+import { REPORT_TYPES } from "@/config/reports";
+import {
+  ApiError,
+  fetchCurrentAccount,
+  fetchFacilities,
+  fetchFacility,
+  fetchReports,
+  submitReport,
+} from "@/lib/api";
 import { cn, formatDateTime } from "@/lib/utils";
-import type { ReportType } from "@/types/domain";
+import type { Facility, ReportType, UserReport } from "@/types/domain";
 
-export function ReportExperience({ initialFacilityId = "" }: { initialFacilityId?: string }) {
+const STATUS_LABELS: Record<UserReport["status"], string> = {
+  received: "접수",
+  reviewing: "확인 중",
+  resolved: "반영 완료",
+};
+
+function errorMessage(error: unknown) {
+  return error instanceof ApiError ? error.message : "요청을 처리하지 못했습니다.";
+}
+
+function FacilitySearchResult({ facility, onSelect }: { facility: Facility; onSelect: (facility: Facility) => void }) {
+  const category = getPrimaryCategory(facility);
+  return (
+    <button type="button" onClick={() => onSelect(facility)} className="flex w-full items-start gap-3 border-t border-[var(--line-soft)] px-3 py-3 text-left hover:bg-[#fafcfb]">
+      <span className="grid size-8 shrink-0 place-items-center rounded-lg" style={{ color: category.color, backgroundColor: category.softColor }}><CategoryIcon categoryId={category.id} className="size-4" /></span>
+      <span className="min-w-0 flex-1"><strong className="block truncate text-[12px] text-[var(--ink)]">{facility.name}</strong><span className="mt-1 block truncate text-[10px] text-[var(--sub)]">{facility.address}</span></span>
+    </button>
+  );
+}
+
+export function ReportExperience({ initialFacilityId }: { initialFacilityId: string | null }) {
   const queryClient = useQueryClient();
-  const [activeTab, setActiveTab] = useState<"new" | "history">("new");
-  const [facilityId, setFacilityId] = useState(initialFacilityId);
-  const [type, setType] = useState<ReportType>("full");
+  const accountQuery = useQuery({ queryKey: ["auth", "me"], queryFn: fetchCurrentAccount, retry: false, staleTime: 60_000 });
+  const [facilitySearch, setFacilitySearch] = useState("");
+  const [selectedFacility, setSelectedFacility] = useState<Facility | null>(null);
+  const [linkedFacilityDismissed, setLinkedFacilityDismissed] = useState(false);
+  const [reportType, setReportType] = useState<ReportType | null>(null);
   const [content, setContent] = useState("");
-  const [error, setError] = useState("");
-  const [deviceId, setDeviceId] = useState<string | null>(null);
+  const [submitted, setSubmitted] = useState(false);
 
-  useEffect(() => {
-    const timeout = window.setTimeout(() => setDeviceId(getOrCreateDeviceId()), 0);
-    return () => window.clearTimeout(timeout);
-  }, []);
-
-  const facilitiesQuery = useQuery({
-    queryKey: ["facilities", "report"],
-    queryFn: () => fetchFacilities({ limit: 200 }),
+  const linkedFacilityQuery = useQuery({
+    queryKey: ["facility", initialFacilityId],
+    queryFn: () => fetchFacility(initialFacilityId as string),
+    enabled: Boolean(initialFacilityId && accountQuery.data && !linkedFacilityDismissed),
+    retry: false,
   });
-  const facilities = useMemo(() => facilitiesQuery.data ?? [], [facilitiesQuery.data]);
-  const effectiveFacilityId = useMemo(() => {
-    if (facilityId && facilities.some((facility) => facility.id === facilityId)) return facilityId;
-    if (initialFacilityId && facilities.some((facility) => facility.id === initialFacilityId)) return initialFacilityId;
-    return facilities[0]?.id ?? "";
-  }, [facilities, facilityId, initialFacilityId]);
+  const activeFacility = selectedFacility ?? (!linkedFacilityDismissed ? linkedFacilityQuery.data ?? null : null);
+
+  const facilityResultsQuery = useQuery({
+    queryKey: ["report-facilities", facilitySearch.trim()],
+    queryFn: () => fetchFacilities({ query: facilitySearch.trim(), limit: 20 }),
+    enabled: Boolean(accountQuery.data && !activeFacility && facilitySearch.trim().length >= 2),
+    staleTime: 30_000,
+  });
   const reportsQuery = useQuery({
-    queryKey: ["reports", deviceId],
-    queryFn: () => fetchReports(deviceId as string),
-    enabled: Boolean(deviceId) && activeTab === "history",
+    queryKey: ["reports"],
+    queryFn: fetchReports,
+    enabled: Boolean(accountQuery.data),
+    retry: false,
   });
   const reportMutation = useMutation({
     mutationFn: submitReport,
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["reports", deviceId] });
+    onSuccess: () => {
+      setContent("");
+      setReportType(null);
+      setSubmitted(true);
+      void queryClient.invalidateQueries({ queryKey: ["reports"] });
     },
   });
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  const reports = useMemo(() => reportsQuery.data ?? [], [reportsQuery.data]);
+
+  function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!deviceId) {
-      setError("기기 식별 정보를 준비하지 못했습니다.");
-      return;
-    }
-    const result = reportSchema.safeParse({ facilityId: effectiveFacilityId, type, content, deviceId });
-    if (!result.success) {
-      setError(result.error.issues[0]?.message ?? "입력 내용을 확인해 주세요.");
-      return;
-    }
-    setError("");
-    reportMutation.mutate(result.data);
+    if (!activeFacility || !reportType || content.trim().length < 5) return;
+    setSubmitted(false);
+    reportMutation.mutate({ facilityId: activeFacility.id, reportType, content: content.trim() });
   }
 
-  function resetForm() {
-    setContent("");
-    setType("full");
-    setError("");
-    reportMutation.reset();
+  if (accountQuery.isPending) {
+    return <div className="mx-auto min-h-[calc(100dvh-138px)] max-w-[920px] px-4 py-6 sm:px-6 lg:min-h-[calc(100dvh-68px)] lg:py-8"><div className="h-[420px] animate-pulse rounded-2xl bg-[#edf1ef]" /></div>;
+  }
+
+  if (!accountQuery.data) {
+    return (
+      <div className="min-h-[calc(100dvh-138px)] px-4 py-5 sm:px-6 lg:min-h-[calc(100dvh-68px)] lg:py-7">
+        <div className="mx-auto max-w-[760px]">
+          <PageHeader title="수거함 제보" />
+          <section className="mt-4 rounded-2xl border border-[var(--line)] bg-white px-5 py-8 text-center sm:px-8">
+            <span className="mx-auto grid size-11 place-items-center rounded-full bg-[var(--brand-soft)] text-[var(--brand-deep)]"><LockKeyhole className="size-5" /></span>
+            <h2 className="mt-4 text-[17px] font-extrabold text-[var(--ink)]">로그인이 필요합니다</h2>
+            <p className="mt-1.5 text-[12px] text-[var(--sub)]">제보 내용과 처리 상태는 계정에 저장됩니다.</p>
+            <Link href="/more#account" className="mt-5 inline-flex h-10 items-center justify-center rounded-lg bg-[var(--brand)] px-5 text-[12px] font-extrabold text-white">로그인 또는 회원가입</Link>
+          </section>
+        </div>
+      </div>
+    );
   }
 
   return (
-    <div className="min-h-[calc(100dvh-138px)] px-4 py-6 sm:px-6 lg:min-h-[calc(100dvh-68px)] lg:py-10">
-      <div className="mx-auto max-w-[1080px]">
-        <PageHeader title="수거함 제보" description="현장 정보가 다르면 익명으로 알려주세요." />
-
-        <div className="mt-6 inline-flex rounded-2xl bg-[#e8eeea] p-1">
-          <button type="button" onClick={() => setActiveTab("new")} className={cn("h-10 rounded-xl px-5 text-[13px] font-extrabold transition", activeTab === "new" ? "bg-white text-[var(--ink)] shadow-sm" : "text-[var(--sub)]")}>새 제보</button>
-          <button type="button" onClick={() => setActiveTab("history")} className={cn("h-10 rounded-xl px-5 text-[13px] font-extrabold transition", activeTab === "history" ? "bg-white text-[var(--ink)] shadow-sm" : "text-[var(--sub)]")}>내 제보</button>
-        </div>
-
-        {activeTab === "new" && !reportMutation.isSuccess && (
-          <form onSubmit={handleSubmit} className="mt-5 grid gap-5 lg:grid-cols-[minmax(0,1fr)_320px]">
-            <div className="space-y-4">
-              <section className="rounded-[24px] border border-[var(--line)] bg-white p-5 sm:p-6">
-                <label htmlFor="facility" className="text-[15px] font-black tracking-[-0.02em]">제보할 장소</label>
-                <div className="relative mt-3">
-                  <MapPin className="pointer-events-none absolute left-4 top-1/2 size-[18px] -translate-y-1/2 text-[var(--brand)]" />
-                  <select id="facility" value={effectiveFacilityId} onChange={(event) => setFacilityId(event.target.value)} disabled={facilitiesQuery.isPending || facilities.length === 0} className="h-13 w-full appearance-none rounded-2xl border border-[var(--line)] bg-[var(--surface-muted)] pl-11 pr-10 text-[13px] font-bold text-[var(--ink)] outline-none transition focus:border-[var(--brand)] focus:bg-white disabled:text-[var(--faint)]">
-                    {facilities.length === 0 && <option value="">선택 가능한 시설이 없습니다</option>}
-                    {facilities.map((facility) => <option key={facility.id} value={facility.id}>{facility.name}</option>)}
-                  </select>
-                  <ChevronRight className="pointer-events-none absolute right-4 top-1/2 size-4 -translate-y-1/2 rotate-90 text-[var(--faint)]" />
+    <div className="min-h-[calc(100dvh-138px)] px-4 py-5 sm:px-6 lg:min-h-[calc(100dvh-68px)] lg:py-7">
+      <div className="mx-auto max-w-[980px]">
+        <PageHeader title="수거함 제보" description="시설의 위치나 상태가 실제와 다르면 알려주세요." />
+        <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
+          <form onSubmit={submit} className="rounded-2xl border border-[var(--line)] bg-white p-5 sm:p-6">
+            <section>
+              <h2 className="text-[13px] font-extrabold text-[var(--ink)]">시설</h2>
+              {activeFacility ? (
+                <div className="mt-3 flex items-start gap-3 rounded-xl border border-[var(--line)] bg-[#fafcfb] p-3">
+                  <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-[var(--brand-soft)] text-[var(--brand-deep)]"><MapPin className="size-[18px]" /></span>
+                  <div className="min-w-0 flex-1"><strong className="block truncate text-[12px] text-[var(--ink)]">{activeFacility.name}</strong><p className="mt-1 truncate text-[10px] text-[var(--sub)]">{activeFacility.address}</p></div>
+                  <button type="button" onClick={() => { setSelectedFacility(null); setLinkedFacilityDismissed(true); }} aria-label="시설 다시 선택" className="grid size-8 place-items-center rounded-lg text-[var(--faint)] hover:bg-white hover:text-[var(--ink)]"><X className="size-4" /></button>
                 </div>
-                {facilitiesQuery.isError && <p className="mt-3 flex items-center gap-1.5 text-[12px] font-bold text-rose-600"><TriangleAlert className="size-4" /> 시설 목록을 불러오지 못했습니다.</p>}
-              </section>
-
-              <section className="rounded-[24px] border border-[var(--line)] bg-white p-5 sm:p-6">
-                <h2 className="text-[15px] font-black tracking-[-0.02em]">어떤 문제인가요?</h2>
-                <div className="mt-4 grid gap-2.5 sm:grid-cols-2">
-                  {REPORT_TYPES.map((reportType) => {
-                    const selected = reportType.id === type;
-                    return <button key={reportType.id} type="button" onClick={() => setType(reportType.id)} className={cn("flex items-center gap-3 rounded-2xl border p-3.5 text-left transition", selected ? "border-[var(--brand)] bg-[var(--brand-pale)] ring-1 ring-[var(--brand)]/10" : "border-[var(--line)] hover:bg-[var(--surface-muted)]")}><span className="grid size-9 shrink-0 place-items-center rounded-xl bg-white shadow-sm"><CircleDot className="size-[18px]" style={{ color: reportType.color }} /></span><span className="min-w-0"><strong className="block text-[13px] text-[var(--ink)]">{reportType.label}</strong><span className="block truncate text-[11px] text-[var(--sub)]">{reportType.description}</span></span>{selected && <Check className="ml-auto size-4 shrink-0 text-[var(--brand)]" />}</button>;
-                  })}
+              ) : (
+                <div className="mt-3 overflow-hidden rounded-xl border border-[var(--line)]">
+                  <label className="flex h-11 items-center gap-2 px-3"><Search className="size-4 text-[var(--faint)]" /><input value={facilitySearch} onChange={(event) => setFacilitySearch(event.target.value)} className="min-w-0 flex-1 text-[12px] font-medium outline-none placeholder:text-[var(--faint)]" placeholder="시설명이나 주소 검색" aria-label="제보할 시설 검색" /></label>
+                  {facilityResultsQuery.isPending && facilitySearch.trim().length >= 2 && <p className="border-t border-[var(--line-soft)] px-3 py-4 text-[11px] text-[var(--sub)]">검색 중</p>}
+                  {facilityResultsQuery.isError && <p className="border-t border-[var(--line-soft)] px-3 py-4 text-[11px] text-rose-600">시설을 불러오지 못했습니다.</p>}
+                  {facilityResultsQuery.data?.map((facility) => <FacilitySearchResult key={facility.id} facility={facility} onSelect={(item) => { setSelectedFacility(item); setLinkedFacilityDismissed(true); setFacilitySearch(""); }} />)}
+                  {facilityResultsQuery.data?.length === 0 && <p className="border-t border-[var(--line-soft)] px-3 py-4 text-[11px] text-[var(--sub)]">검색 결과가 없습니다.</p>}
                 </div>
-              </section>
+              )}
+            </section>
 
-              <section className="rounded-[24px] border border-[var(--line)] bg-white p-5 sm:p-6">
-                <div className="flex items-center justify-between"><label htmlFor="report-content" className="text-[15px] font-black tracking-[-0.02em]">상황을 알려주세요</label><span className="text-[11px] font-semibold text-[var(--faint)]">{content.length}/300</span></div>
-                <textarea id="report-content" value={content} maxLength={300} onChange={(event) => setContent(event.target.value)} placeholder="현장에서 확인한 상황을 적어 주세요." className="mt-3 min-h-32 w-full resize-none rounded-2xl border border-[var(--line)] bg-[var(--surface-muted)] p-4 text-[13px] leading-6 outline-none transition placeholder:text-[#9aa49f] focus:border-[var(--brand)] focus:bg-white" />
-                {error && <p role="alert" className="mt-2 text-[12px] font-bold text-rose-600">{error}</p>}
-                {reportMutation.isError && <p role="alert" className="mt-2 text-[12px] font-bold text-rose-600">제보를 저장하지 못했습니다. API와 Oracle 연결을 확인해 주세요.</p>}
-                <button type="button" disabled className="mt-3 flex w-full items-center gap-3 rounded-2xl border border-dashed border-[#cbd6d0] bg-[#fafcfb] p-4 text-left opacity-60"><span className="grid size-10 place-items-center rounded-xl bg-white text-[var(--brand-deep)] shadow-sm"><ImagePlus className="size-5" /></span><span><strong className="block text-[12px] text-[var(--ink)]">사진 첨부</strong><span className="text-[11px] text-[var(--sub)]">객체 저장소 연결 후 제공됩니다</span></span></button>
-              </section>
-            </div>
+            <section className="mt-6">
+              <h2 className="text-[13px] font-extrabold text-[var(--ink)]">제보 유형</h2>
+              <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                {REPORT_TYPES.map((item) => {
+                  const Icon = item.icon;
+                  const selected = reportType === item.id;
+                  return (
+                    <button key={item.id} type="button" onClick={() => setReportType(item.id)} aria-pressed={selected} className={cn("flex items-center gap-3 rounded-xl border p-3 text-left transition", selected ? "border-[var(--brand)] bg-[var(--brand-pale)]" : "border-[var(--line)] hover:bg-[#fafcfb]")}>
+                      <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-white" style={{ color: item.color }}><Icon className="size-4" /></span>
+                      <span className="min-w-0"><strong className="block text-[11px] text-[var(--ink)]">{item.label}</strong><span className="mt-0.5 block truncate text-[9px] text-[var(--sub)]">{item.description}</span></span>
+                    </button>
+                  );
+                })}
+              </div>
+            </section>
 
-            <aside className="space-y-4">
-              <div className="rounded-[24px] bg-[#12392f] p-5 text-white"><ShieldCheck className="size-7 text-[#69d4aa]" /><h2 className="mt-4 text-[16px] font-black">익명으로 안전하게</h2><p className="mt-2 text-[12px] leading-5 text-white/60">로그인 없이 제보할 수 있습니다. 무작위 기기 ID는 내 제보 조회에만 사용됩니다.</p></div>
-              <div className="rounded-[22px] border border-[var(--line)] bg-white p-4 text-[12px] leading-5 text-[var(--sub)]"><p className="font-extrabold text-[var(--ink)]">처리 상태</p><p className="mt-2">접수된 제보는 Oracle에 저장되고 운영 확인 상태에 따라 접수됨, 확인 중, 반영 완료로 표시됩니다.</p></div>
-              <button type="submit" disabled={reportMutation.isPending || !effectiveFacilityId || !deviceId} className="flex h-13 w-full items-center justify-center gap-2 rounded-2xl bg-[var(--brand)] text-[13px] font-extrabold text-white shadow-[0_10px_24px_rgba(15,159,110,0.22)] transition hover:bg-[var(--brand-deep)] disabled:opacity-60">{reportMutation.isPending ? <LoaderCircle className="size-4 animate-spin" /> : <Send className="size-4" />}{reportMutation.isPending ? "제보 보내는 중" : "제보 보내기"}</button>
-            </aside>
+            <label className="mt-6 block text-[13px] font-extrabold text-[var(--ink)]">상세 내용<textarea value={content} onChange={(event) => setContent(event.target.value)} minLength={5} maxLength={1000} required rows={5} className="mt-3 w-full resize-none rounded-xl border border-[var(--line)] p-3 text-[12px] font-medium leading-5 outline-none focus:border-[var(--brand)]" placeholder="확인이 필요한 내용을 적어주세요." /></label>
+            {reportMutation.isError && <p role="alert" className="mt-3 flex items-center gap-1.5 text-[11px] font-semibold text-rose-600"><TriangleAlert className="size-4" />{errorMessage(reportMutation.error)}</p>}
+            {submitted && <p role="status" className="mt-3 flex items-center gap-1.5 text-[11px] font-semibold text-[var(--brand-deep)]"><CheckCircle2 className="size-4" />제보가 접수되었습니다.</p>}
+            <button type="submit" disabled={!activeFacility || !reportType || content.trim().length < 5 || reportMutation.isPending} className="mt-4 flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-[var(--brand)] text-[12px] font-extrabold text-white disabled:bg-[#aebbb5]"><Send className="size-4" />{reportMutation.isPending ? "접수 중" : "제보 접수"}</button>
           </form>
-        )}
 
-        {activeTab === "new" && reportMutation.isSuccess && (
-          <div className="mt-5 rounded-[28px] border border-[var(--line)] bg-white px-5 py-14 text-center shadow-sm"><span className="mx-auto grid size-16 place-items-center rounded-[22px] bg-[var(--brand-soft)] text-[var(--brand-deep)]"><Check className="size-8" strokeWidth={3} /></span><h2 className="mt-5 text-[22px] font-black tracking-[-0.04em]">제보가 접수됐어요</h2><p className="mt-2 text-[13px] leading-6 text-[var(--sub)]">이 기기의 ‘내 제보’에서 저장된 내용을 확인할 수 있어요.</p><div className="mt-6 flex justify-center gap-2"><button type="button" onClick={() => setActiveTab("history")} className="h-11 rounded-xl border border-[var(--line)] px-4 text-[12px] font-extrabold">내 제보 보기</button><button type="button" onClick={resetForm} className="h-11 rounded-xl bg-[var(--brand)] px-4 text-[12px] font-extrabold text-white">다른 제보하기</button></div></div>
-        )}
-
-        {activeTab === "history" && (
-          <section className="mt-5 space-y-3">
-            {reportsQuery.isPending && <div className="rounded-[22px] bg-white p-10 text-center"><LoaderCircle className="mx-auto size-6 animate-spin text-[var(--brand)]" /></div>}
-            {reportsQuery.isError && <div className="rounded-[22px] border border-rose-100 bg-white p-10 text-center"><TriangleAlert className="mx-auto size-6 text-rose-500" /><p className="mt-3 text-[13px] font-bold text-rose-700">내 제보를 불러오지 못했습니다.</p><button type="button" onClick={() => reportsQuery.refetch()} className="mt-3 rounded-xl border border-[var(--line)] px-3 py-2 text-[11px] font-extrabold">다시 시도</button></div>}
-            {reportsQuery.data?.map((report) => <article key={report.id} className="rounded-[22px] border border-[var(--line)] bg-white p-5 sm:flex sm:items-center sm:gap-5"><span className="grid size-11 shrink-0 place-items-center rounded-2xl bg-[var(--surface-muted)] text-[var(--brand-deep)]"><Camera className="size-5" /></span><div className="mt-3 min-w-0 flex-1 sm:mt-0"><div className="flex flex-wrap items-center gap-2"><h2 className="truncate text-[14px] font-black">{report.facilityName}</h2><span className="rounded-full bg-[#fff3df] px-2 py-1 text-[10px] font-extrabold text-[#ac7218]">{REPORT_TYPE_BY_ID[report.type].label}</span></div><p className="mt-1 truncate text-[12px] text-[var(--sub)]">{report.content}</p><p className="mt-2 flex items-center gap-1 text-[11px] text-[var(--faint)]"><Clock3 className="size-3" /> {formatDateTime(report.createdAt)}</p></div><span className={cn("mt-4 inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[11px] font-extrabold sm:mt-0", report.status === "resolved" ? "bg-[var(--brand-soft)] text-[var(--brand-deep)]" : "bg-blue-50 text-blue-700")}>{report.status === "resolved" ? <Check className="size-3.5" /> : <LoaderCircle className="size-3.5" />}{REPORT_STATUS_LABELS[report.status]}</span></article>)}
-            {reportsQuery.data?.length === 0 && <div className="rounded-[22px] border border-[var(--line)] bg-white p-12 text-center"><Send className="mx-auto size-7 text-[var(--faint)]" /><h2 className="mt-3 text-[16px] font-black">아직 제보가 없습니다.</h2><button type="button" onClick={() => setActiveTab("new")} className="mt-4 rounded-xl bg-[var(--brand)] px-4 py-2.5 text-[12px] font-extrabold text-white">새 제보 작성</button></div>}
-          </section>
-        )}
+          <aside className="h-fit overflow-hidden rounded-2xl border border-[var(--line)] bg-white">
+            <div className="border-b border-[var(--line-soft)] px-4 py-4"><h2 className="text-[13px] font-extrabold text-[var(--ink)]">내 제보</h2></div>
+            {reportsQuery.isPending && <div className="space-y-2 p-4"><div className="h-16 animate-pulse rounded-xl bg-[#f0f3f1]" /><div className="h-16 animate-pulse rounded-xl bg-[#f0f3f1]" /></div>}
+            {reportsQuery.isError && <p className="px-4 py-8 text-center text-[11px] text-rose-600">제보 내역을 불러오지 못했습니다.</p>}
+            {!reportsQuery.isPending && !reportsQuery.isError && reports.length === 0 && <p className="px-4 py-10 text-center text-[11px] text-[var(--sub)]">접수한 제보가 없습니다.</p>}
+            {reports.map((report) => {
+              const type = REPORT_TYPES.find((item) => item.id === report.reportType);
+              return (
+                <article key={report.id} className="border-b border-[var(--line-soft)] p-4 last:border-b-0">
+                  <div className="flex items-center justify-between gap-2"><strong className="truncate text-[11px] text-[var(--ink)]">{report.facilityName}</strong><span className="shrink-0 rounded-full bg-[var(--brand-soft)] px-2 py-1 text-[9px] font-bold text-[var(--brand-deep)]">{STATUS_LABELS[report.status]}</span></div>
+                  <p className="mt-1.5 text-[10px] font-semibold text-[var(--sub)]">{type?.label ?? "시설 정보"}</p>
+                  <p className="mt-1 line-clamp-2 text-[10px] leading-4 text-[var(--faint)]">{report.content}</p>
+                  <p className="mt-2 flex items-center gap-1 text-[9px] text-[var(--faint)]"><Clock3 className="size-3" />{formatDateTime(report.createdAt)}</p>
+                </article>
+              );
+            })}
+          </aside>
+        </div>
       </div>
     </div>
   );

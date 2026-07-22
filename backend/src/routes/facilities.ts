@@ -20,7 +20,7 @@ const querySchema = z.object({
   south: optionalNumber.pipe(z.number().min(-90).max(90).optional()),
   east: optionalNumber.pipe(z.number().min(-180).max(180).optional()),
   north: optionalNumber.pipe(z.number().min(-90).max(90).optional()),
-  limit: z.coerce.number().int().min(1).max(200).default(100),
+  limit: z.coerce.number().int().min(1).optional(),
 }).superRefine((value, context) => {
   if ((value.latitude === undefined) !== (value.longitude === undefined)) {
     context.addIssue({ code: "custom", message: "latitude와 longitude는 함께 입력해야 합니다." });
@@ -38,7 +38,7 @@ export async function facilityRoutes(app: FastifyInstance) {
     const parsed = querySchema.parse(request.query);
     const { ids: idsParam, ...filters } = parsed;
     const ids = idsParam
-      ? idsParam.split(",").map((id) => id.trim()).slice(0, 100)
+      ? idsParam.split(",").map((id) => id.trim())
       : undefined;
     return {
       facilities: await findFacilities({
