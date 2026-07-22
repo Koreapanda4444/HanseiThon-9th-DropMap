@@ -5,7 +5,6 @@ export const facilityCategoryIds = [
   "battery",
   "clothes",
   "cigarette",
-  "electronics",
 ] as const;
 
 export type FacilityCategoryId = typeof facilityCategoryIds[number];

@@ -26,6 +26,7 @@ import { BrandMark } from "@/components/ui/brand-mark";
 import { CategoryIcon } from "@/components/ui/category-icon";
 import { getPrimaryCategory } from "@/config/facility-categories";
 import { fetchFacilities, fetchFacilityClusters, fetchPlaceImage, searchPlaces } from "@/lib/api";
+import { useDebouncedValue } from "@/lib/use-debounced-value";
 import { cn, formatDistance } from "@/lib/utils";
 import { useAppStore } from "@/store/use-app-store";
 import type { Facility, PlaceSearchResult } from "@/types/domain";
@@ -52,7 +53,7 @@ function PlaceSearchForm({ value, onChange, onSubmit, onClear, suggestions, sugg
     <div className={cn("relative", className)} onFocusCapture={() => onOpenChange(true)} onBlurCapture={handleBlur}>
       <form onSubmit={onSubmit} className="flex h-11 items-center rounded-xl border border-[#d8dfdb] bg-white px-3 shadow-[0_4px_14px_rgba(30,45,39,0.08)] transition focus-within:border-[var(--brand)] focus-within:ring-3 focus-within:ring-[var(--brand)]/10">
         <Search className="size-[18px] shrink-0 text-[#66736d]" />
-        <input value={value} onChange={(event) => onChange(event.target.value)} className="h-full min-w-0 flex-1 bg-transparent px-2.5 text-[13px] font-semibold text-[var(--ink)] outline-none placeholder:text-[#98a29d]" placeholder="장소, 건물, 주소 검색" aria-label="장소, 건물, 주소 검색" autoComplete="off" />
+        <input value={value} onChange={(event) => onChange(event.target.value)} maxLength={120} className="h-full min-w-0 flex-1 bg-transparent px-2.5 text-[13px] font-semibold text-[var(--ink)] outline-none placeholder:text-[#98a29d]" placeholder="장소, 건물, 주소 검색" aria-label="장소, 건물, 주소 검색" autoComplete="off" />
         {value && <button type="button" onClick={onClear} aria-label="검색어 지우기" className="grid size-7 shrink-0 place-items-center rounded-full text-[#89948f] hover:bg-[var(--surface-muted)]"><X className="size-3.5" /></button>}
         <button type="submit" disabled={value.trim().length < 2} className="ml-1 h-8 shrink-0 rounded-lg bg-[var(--brand)] px-3 text-[11px] font-extrabold text-white disabled:bg-[#b8c4be]">검색</button>
       </form>
@@ -119,7 +120,7 @@ function placeDirectionsHref(place: PlaceSearchResult) {
 function PlacePreview({ place, onBack }: { place: PlaceSearchResult; onBack: () => void }) {
   const imageQuery = useQuery({
     queryKey: ["place-image", place.id],
-    queryFn: () => fetchPlaceImage(`${place.name} ${place.roadAddress || place.address}`),
+    queryFn: ({ signal }) => fetchPlaceImage(`${place.name} ${place.roadAddress || place.address}`, signal),
     staleTime: 30 * 60_000,
     retry: false,
   });
@@ -147,7 +148,6 @@ export function MapWorkspace() {
   const selectedFacilityId = useAppStore((state) => state.selectedFacilityId);
   const setSelectedFacilityId = useAppStore((state) => state.setSelectedFacilityId);
   const [searchValue, setSearchValue] = useState("");
-  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [suggestionsOpen, setSuggestionsOpen] = useState(false);
   const [hasPlaceSearch, setHasPlaceSearch] = useState(false);
   const [selectedPlace, setSelectedPlace] = useState<PlaceSearchResult | null>(null);
@@ -161,22 +161,24 @@ export function MapWorkspace() {
   const aggregateMode = viewport !== null && viewport.level >= AGGREGATE_ZOOM_LEVEL;
   const clusterColumns = viewport ? Math.min(18, Math.max(5, Math.floor(viewport.width / 88))) : 12;
   const clusterRows = viewport ? Math.min(14, Math.max(5, Math.floor(viewport.height / 88))) : 10;
+  const distanceLocation = useMemo(() => userLocation ? {
+    latitude: Number(userLocation.latitude.toFixed(4)),
+    longitude: Number(userLocation.longitude.toFixed(4)),
+  } : null, [userLocation]);
 
-  useEffect(() => {
-    const timeout = window.setTimeout(() => setDebouncedSearch(searchValue.trim()), 220);
-    return () => window.clearTimeout(timeout);
-  }, [searchValue]);
+  const debouncedSearch = useDebouncedValue(searchValue.trim(), 220);
+  const suggestionsReady = debouncedSearch === searchValue.trim();
 
   useEffect(() => () => {
     if (locationErrorTimerRef.current !== null) window.clearTimeout(locationErrorTimerRef.current);
   }, []);
 
   const facilitiesQuery = useQuery({
-    queryKey: ["facilities", selectedCategoryId, viewport?.west, viewport?.south, viewport?.east, viewport?.north, userLocation?.latitude, userLocation?.longitude],
+    queryKey: ["facilities", selectedCategoryId, viewport?.west, viewport?.south, viewport?.east, viewport?.north, distanceLocation?.latitude, distanceLocation?.longitude],
     queryFn: ({ signal }) => fetchFacilities({
       categoryId: selectedCategoryId,
       ...(viewport ? { west: viewport.west, south: viewport.south, east: viewport.east, north: viewport.north } : {}),
-      ...(userLocation ? { latitude: userLocation.latitude, longitude: userLocation.longitude } : {}),
+      ...(distanceLocation ?? {}),
     }, signal),
     enabled: viewport !== null && !aggregateMode,
     placeholderData: (previous) => previous,
@@ -199,7 +201,7 @@ export function MapWorkspace() {
   });
   const suggestionsQuery = useQuery({
     queryKey: ["place-suggestions", debouncedSearch, userLocation],
-    queryFn: () => searchPlaces(debouncedSearch, userLocation, 3),
+    queryFn: ({ signal }) => searchPlaces(debouncedSearch, userLocation, 3, signal),
     enabled: suggestionsOpen && debouncedSearch.length >= 2,
     staleTime: 30_000,
   });
@@ -243,7 +245,6 @@ export function MapWorkspace() {
 
   function clearSearch() {
     setSearchValue("");
-    setDebouncedSearch("");
     setHasPlaceSearch(false);
     setSelectedPlace(null);
     setSuggestionsOpen(false);
@@ -294,7 +295,7 @@ export function MapWorkspace() {
     }
   }
 
-  const searchForm = (className?: string) => <PlaceSearchForm value={searchValue} onChange={handleSearchValueChange} onSubmit={handleSearch} onClear={clearSearch} suggestions={suggestionsQuery.data ?? []} suggestionsPending={suggestionsQuery.isPending && debouncedSearch.length >= 2} suggestionsOpen={suggestionsOpen} onOpenChange={setSuggestionsOpen} onSelectSuggestion={handlePlaceSelect} className={className} />;
+  const searchForm = (className?: string) => <PlaceSearchForm value={searchValue} onChange={handleSearchValueChange} onSubmit={handleSearch} onClear={clearSearch} suggestions={suggestionsReady ? suggestionsQuery.data ?? [] : []} suggestionsPending={searchValue.trim().length >= 2 && (!suggestionsReady || suggestionsQuery.isPending)} suggestionsOpen={suggestionsOpen} onOpenChange={setSuggestionsOpen} onSelectSuggestion={handlePlaceSelect} className={className} />;
 
   let desktopContent;
   if (selectedFacility) {

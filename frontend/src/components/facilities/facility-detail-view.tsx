@@ -16,7 +16,7 @@ import type { Facility } from "@/types/domain";
 export function FacilityDetailExperience({ id }: { id: string }) {
   const facilityQuery = useQuery({
     queryKey: ["facility", id],
-    queryFn: () => fetchFacility(id),
+    queryFn: ({ signal }) => fetchFacility(id, signal),
     retry: false,
   });
 

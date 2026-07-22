@@ -14,7 +14,7 @@ export function FavoritesExperience() {
   const [query, setQuery] = useState("");
   const facilitiesQuery = useQuery({
     queryKey: ["favorite-facilities", favoriteIds],
-    queryFn: () => fetchFacilities({ ids: favoriteIds }),
+    queryFn: ({ signal }) => fetchFacilities({ ids: favoriteIds }, signal),
     enabled: favoriteIds.length > 0,
   });
   const favorites = useMemo(() => {

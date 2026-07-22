@@ -4,8 +4,7 @@ export type FacilityCategoryId =
   | "medicine"
   | "battery"
   | "clothes"
-  | "cigarette"
-  | "electronics";
+  | "cigarette";
 
 export type FacilityStatus = "available" | "busy" | "unavailable";
 export type ReportType = "full" | "missing" | "broken" | "location" | "info";

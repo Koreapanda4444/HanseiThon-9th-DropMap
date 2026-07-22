@@ -44,35 +44,94 @@ interface ErrorPayload {
   };
 }
 
-async function apiRequest<T>(path: string, init?: RequestInit) {
-  let response: Response;
-  const method = (init?.method || "GET").toUpperCase();
-  const stateChanging = !["GET", "HEAD", "OPTIONS"].includes(method);
+async function readLimitedResponseText(response: Response, maximumBytes: number) {
+  const advertisedLength = Number(response.headers.get("content-length"));
+  if (Number.isFinite(advertisedLength) && advertisedLength > maximumBytes) {
+    throw new RangeError("Response body exceeds the size limit");
+  }
+  if (!response.body) return "";
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  const chunks: string[] = [];
+  let totalBytes = 0;
   try {
-    response = await fetch(`${apiBaseUrl()}${path}`, {
-      ...init,
-      credentials: "include",
-      headers: {
-        Accept: "application/json",
-        ...(init?.body ? { "Content-Type": "application/json" } : {}),
-        ...(stateChanging ? { "X-Requested-With": "beoril-map" } : {}),
-        ...init?.headers,
-      },
-    });
-  } catch (error) {
-    if (error instanceof Error && error.name === "AbortError") throw error;
-    throw new ApiError("현재 서비스를 이용할 수 없습니다. 잠시 후 다시 시도해 주세요.", 0, "NETWORK_ERROR");
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      totalBytes += value.byteLength;
+      if (totalBytes > maximumBytes) {
+        await reader.cancel().catch(() => undefined);
+        throw new RangeError("Response body exceeds the size limit");
+      }
+      chunks.push(decoder.decode(value, { stream: true }));
+    }
+    chunks.push(decoder.decode());
+    return chunks.join("");
+  } finally {
+    reader.releaseLock();
   }
+}
 
-  const payload = await response.json().catch(() => ({})) as T & ErrorPayload;
-  if (!response.ok) {
-    throw new ApiError(
-      payload.error?.message || "요청을 처리하지 못했습니다.",
-      response.status,
-      payload.error?.code || "REQUEST_FAILED",
-    );
+async function apiRequest<T>(path: string, init: RequestInit = {}, timeoutMs = 20_000) {
+  const method = (init.method || "GET").toUpperCase();
+  const stateChanging = !["GET", "HEAD", "OPTIONS"].includes(method);
+  const headers = new Headers(init.headers);
+  headers.set("Accept", "application/json");
+  if (init.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
+  if (stateChanging) headers.set("X-Requested-With", "beoril-map");
+  const controller = new AbortController();
+  let timedOut = false;
+  const abort = () => controller.abort(init.signal?.reason);
+  if (init.signal?.aborted) abort();
+  else init.signal?.addEventListener("abort", abort, { once: true });
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+  try {
+    let response: Response;
+    try {
+      response = await fetch(`${apiBaseUrl()}${path}`, {
+        ...init,
+        credentials: "include",
+        headers,
+        signal: controller.signal,
+      });
+    } catch (error) {
+      if (init.signal?.aborted) throw error;
+      if (timedOut) throw new ApiError("요청 시간이 초과되었습니다. 다시 시도해 주세요.", 0, "REQUEST_TIMEOUT");
+      throw new ApiError("현재 서비스를 이용할 수 없습니다. 잠시 후 다시 시도해 주세요.", 0, "NETWORK_ERROR");
+    }
+
+    let responseText: string;
+    try {
+      responseText = await readLimitedResponseText(response, 25 * 1024 * 1024);
+    } catch (error) {
+      if (init.signal?.aborted) throw error;
+      if (timedOut) throw new ApiError("요청 시간이 초과되었습니다. 다시 시도해 주세요.", 0, "REQUEST_TIMEOUT");
+      throw new ApiError("서버 응답을 확인하지 못했습니다.", response.status, "INVALID_RESPONSE");
+    }
+    let parsed: unknown = {};
+    if (responseText) {
+      try {
+        parsed = JSON.parse(responseText);
+      } catch {
+        throw new ApiError("서버 응답을 확인하지 못했습니다.", response.status, "INVALID_RESPONSE");
+      }
+    }
+    const payload = (typeof parsed === "object" && parsed !== null ? parsed : {}) as T & ErrorPayload;
+    if (!response.ok) {
+      throw new ApiError(
+        payload.error?.message || "요청을 처리하지 못했습니다.",
+        response.status,
+        payload.error?.code || "REQUEST_FAILED",
+      );
+    }
+    return payload;
+  } finally {
+    clearTimeout(timeout);
+    init.signal?.removeEventListener("abort", abort);
   }
-  return payload;
 }
 
 export interface FacilityFilters {
@@ -89,7 +148,14 @@ export interface FacilityFilters {
   limit?: number;
 }
 
-export async function fetchFacilities(filters: FacilityFilters = {}, signal?: AbortSignal) {
+export async function fetchFacilities(filters: FacilityFilters = {}, signal?: AbortSignal): Promise<Facility[]> {
+  if (filters.ids && filters.ids.length > 200) {
+    const { ids, ...sharedFilters } = filters;
+    const batches: string[][] = [];
+    for (let index = 0; index < ids.length; index += 200) batches.push(ids.slice(index, index + 200));
+    const facilities: Facility[] = (await Promise.all(batches.map((batch) => fetchFacilities({ ...sharedFilters, ids: batch }, signal)))).flat();
+    return [...new Map(facilities.map((facility) => [facility.id, facility])).values()];
+  }
   const params = new URLSearchParams();
   if (filters.categoryId && filters.categoryId !== "all") params.set("categoryId", filters.categoryId);
   if (filters.query) params.set("query", filters.query);
@@ -129,41 +195,41 @@ export async function fetchFacilityClusters(filters: {
   return response.clusters;
 }
 
-export async function fetchFacility(id: string) {
-  const response = await apiRequest<{ facility: Facility }>(`/api/facilities/${encodeURIComponent(id)}`);
+export async function fetchFacility(id: string, signal?: AbortSignal) {
+  const response = await apiRequest<{ facility: Facility }>(`/api/facilities/${encodeURIComponent(id)}`, { signal });
   return response.facility;
 }
 
-export async function searchPlaces(query: string, location?: { latitude: number; longitude: number } | null, limit = 15) {
+export async function searchPlaces(query: string, location?: { latitude: number; longitude: number } | null, limit = 15, signal?: AbortSignal) {
   const params = new URLSearchParams({ query });
   params.set("limit", String(limit));
   if (location) {
     params.set("latitude", String(location.latitude));
     params.set("longitude", String(location.longitude));
   }
-  const response = await apiRequest<{ results: PlaceSearchResult[] }>(`/api/places?${params.toString()}`);
+  const response = await apiRequest<{ results: PlaceSearchResult[] }>(`/api/places?${params.toString()}`, { signal });
   return response.results;
 }
 
-export async function fetchPlaceImage(query: string) {
+export async function fetchPlaceImage(query: string, signal?: AbortSignal) {
   const params = new URLSearchParams({ query });
-  const response = await apiRequest<{ result: PlaceImage | null }>(`/api/place-image?${params.toString()}`);
+  const response = await apiRequest<{ result: PlaceImage | null }>(`/api/place-image?${params.toString()}`, { signal });
   return response.result;
 }
 
-export async function fetchDirections(origin: { latitude: number; longitude: number }, destination: { latitude: number; longitude: number }) {
+export async function fetchDirections(origin: { latitude: number; longitude: number }, destination: { latitude: number; longitude: number }, signal?: AbortSignal) {
   const params = new URLSearchParams({
     originLatitude: String(origin.latitude),
     originLongitude: String(origin.longitude),
     destinationLatitude: String(destination.latitude),
     destinationLongitude: String(destination.longitude),
   });
-  const response = await apiRequest<{ route: DirectionsRoute }>(`/api/directions?${params.toString()}`);
+  const response = await apiRequest<{ route: DirectionsRoute }>(`/api/directions?${params.toString()}`, { signal });
   return response.route;
 }
 
-export async function fetchWasteItems() {
-  const response = await apiRequest<{ items: WasteItem[] }>("/api/waste-items?limit=20");
+export async function fetchWasteItems(signal?: AbortSignal) {
+  const response = await apiRequest<{ items: WasteItem[] }>("/api/waste-items?limit=20", { signal });
   return response.items;
 }
 
@@ -175,24 +241,25 @@ export async function classifyWaste(query: string) {
   return response.results;
 }
 
-export async function fetchStats() {
-  return apiRequest<ServiceStats>("/api/stats");
+export async function fetchStats(signal?: AbortSignal) {
+  return apiRequest<ServiceStats>("/api/stats", { signal });
 }
 
-export async function fetchHealth() {
-  return apiRequest<ServiceHealth>("/health");
+export async function fetchHealth(signal?: AbortSignal) {
+  return apiRequest<ServiceHealth>("/health", { signal });
 }
 
-export async function analyzeImage(image: string) {
+export async function analyzeImage(image: string, signal?: AbortSignal) {
   const response = await apiRequest<{ items: ImageAnalysisItem[] }>("/api/analyze-image", {
     method: "POST",
     body: JSON.stringify({ image }),
-  });
+    signal,
+  }, 60_000);
   return response.items;
 }
 
-export async function fetchCurrentAccount() {
-  const response = await apiRequest<{ user: Account | null }>("/api/auth/me");
+export async function fetchCurrentAccount(signal?: AbortSignal) {
+  const response = await apiRequest<{ user: Account | null }>("/api/auth/me", { signal });
   return response.user;
 }
 
@@ -230,8 +297,8 @@ export async function deleteAccount(password: string) {
   });
 }
 
-export async function fetchReports() {
-  const response = await apiRequest<{ reports: UserReport[] }>("/api/reports");
+export async function fetchReports(signal?: AbortSignal) {
+  const response = await apiRequest<{ reports: UserReport[] }>("/api/reports", { signal });
   return response.reports;
 }
 

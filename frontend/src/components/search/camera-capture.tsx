@@ -47,9 +47,11 @@ export function CameraCapture({ onClose, onCapture }: {
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
           await videoRef.current.play();
+          if (videoRef.current.readyState >= 2) setReady(true);
         }
       } catch (cameraError) {
         if (!active) return;
+        stopCamera();
         const denied = cameraError instanceof DOMException && cameraError.name === "NotAllowedError";
         setError(denied ? "카메라 권한을 허용해 주세요." : "카메라를 시작하지 못했습니다.");
       }

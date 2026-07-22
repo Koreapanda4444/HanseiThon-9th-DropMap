@@ -26,7 +26,7 @@ export function AccountPanel() {
   const queryClient = useQueryClient();
   const accountQuery = useQuery({
     queryKey: ["auth", "me"],
-    queryFn: fetchCurrentAccount,
+    queryFn: ({ signal }) => fetchCurrentAccount(signal),
     retry: false,
     staleTime: 60_000,
   });
@@ -56,8 +56,8 @@ export function AccountPanel() {
       ? loginAccount({ email, password })
       : registerAccount({ name, email, password }),
     onSuccess: (account) => {
+      queryClient.removeQueries({ queryKey: ["reports"] });
       queryClient.setQueryData(["auth", "me"], account);
-      void queryClient.invalidateQueries({ queryKey: ["reports"] });
       setPassword("");
     },
   });

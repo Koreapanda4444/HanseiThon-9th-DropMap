@@ -4,7 +4,7 @@ import type { FacilityImportRecord, PreparedImport } from "./types.js";
 
 export function cleanText(value: unknown, maximum = Number.MAX_SAFE_INTEGER) {
   const text = String(value ?? "")
-    .replace(/\u0000/g, "")
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "")
     .replace(/\s+/g, " ")
     .trim();
   return text.slice(0, maximum);
@@ -54,7 +54,10 @@ export function parseDate(value: unknown) {
     const month = Number(compact.slice(4, 6));
     const day = Number(compact.slice(6, 8));
     if (year >= 2000 && month >= 1 && month <= 12 && day >= 1 && day <= 31) {
-      return new Date(Date.UTC(year, month - 1, day));
+      const date = new Date(Date.UTC(year, month - 1, day));
+      if (date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day) {
+        return date;
+      }
     }
   }
   const date = new Date(text);
@@ -84,7 +87,6 @@ export function categoriesFromText(text: string, base: FacilityCategoryId[]) {
   if (/재활용/.test(text)) categories.push("recycle");
   if (/의류|헌옷/.test(text)) categories.push("clothes");
   if (/건전지|배터리|전지|형광|LED/.test(text)) categories.push("battery");
-  if (/폐가전|가전제품|전자제품|전기제품/.test(text)) categories.push("electronics");
   if (/담배|꽁초/.test(text)) categories.push("cigarette");
   return [...new Set(categories)];
 }

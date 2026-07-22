@@ -3,10 +3,11 @@
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft, Building2, Clock3, LocateFixed, LoaderCircle, MapPin, Navigation, Route, TriangleAlert, X } from "lucide-react";
 import Link from "next/link";
-import { useDeferredValue, useState, type FocusEvent } from "react";
+import { useEffect, useRef, useState, type FocusEvent } from "react";
 import { KakaoMap } from "@/components/map/kakao-map";
 import { ApiError, fetchDirections, fetchFacility, searchPlaces } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { useDebouncedValue } from "@/lib/use-debounced-value";
 import type { Facility, PlaceSearchResult } from "@/types/domain";
 
 export interface RoutePoint {
@@ -56,10 +57,11 @@ function RouteField({ label, value, point, onValueChange, onSelect, onUseLocatio
   locationPending?: boolean;
 }) {
   const [open, setOpen] = useState(false);
-  const deferredValue = useDeferredValue(value.trim());
+  const deferredValue = useDebouncedValue(value.trim(), 220);
+  const resultsReady = deferredValue === value.trim();
   const resultsQuery = useQuery({
     queryKey: ["route-place-search", deferredValue],
-    queryFn: () => searchPlaces(deferredValue, null, 3),
+    queryFn: ({ signal }) => searchPlaces(deferredValue, null, 3, signal),
     enabled: open && deferredValue.length >= 2 && !point,
     staleTime: 30_000,
   });
@@ -73,16 +75,16 @@ function RouteField({ label, value, point, onValueChange, onSelect, onUseLocatio
       <label className="block text-[10px] font-bold text-[var(--sub)]">{label}
         <span className={cn("mt-1.5 flex h-11 items-center rounded-xl border bg-white px-3", point ? "border-[var(--brand)]" : "border-[var(--line)] focus-within:border-[var(--brand)]")}>
           {label === "출발지" ? <Navigation className="size-4 shrink-0 text-blue-600" /> : <MapPin className="size-4 shrink-0 text-[var(--brand-deep)]" />}
-          <input value={value} onChange={(event) => onValueChange(event.target.value)} className="h-full min-w-0 flex-1 px-2.5 text-[12px] font-semibold text-[var(--ink)] outline-none" placeholder={`${label} 검색`} autoComplete="off" />
+          <input value={value} onChange={(event) => onValueChange(event.target.value)} maxLength={120} className="h-full min-w-0 flex-1 px-2.5 text-[12px] font-semibold text-[var(--ink)] outline-none" placeholder={`${label} 검색`} autoComplete="off" />
           {value && <button type="button" onClick={() => onValueChange("")} aria-label={`${label} 지우기`} className="grid size-7 place-items-center text-[var(--faint)]"><X className="size-3.5" /></button>}
           {onUseLocation && <button type="button" onClick={onUseLocation} disabled={locationPending} className="ml-1 grid size-8 place-items-center rounded-lg bg-[#edf4ff] text-blue-600 disabled:opacity-50" aria-label="현재 위치를 출발지로 설정">{locationPending ? <LoaderCircle className="size-4 animate-spin" /> : <LocateFixed className="size-4" />}</button>}
         </span>
       </label>
       {open && !point && value.trim().length >= 2 && (
         <div className="absolute inset-x-0 top-[calc(100%+5px)] z-50 overflow-hidden rounded-xl border border-[var(--line)] bg-white shadow-[0_10px_24px_rgba(28,42,36,0.14)]">
-          {resultsQuery.isPending && <div className="space-y-2 p-3"><div className="h-10 animate-pulse rounded-lg bg-[#eef2ef]" /><div className="h-10 animate-pulse rounded-lg bg-[#eef2ef]" /></div>}
-          {resultsQuery.data?.map((place) => <button key={place.id} type="button" onClick={() => { onSelect(placeToRoutePoint(place)); setOpen(false); }} className="flex w-full items-start gap-2.5 border-b border-[var(--line-soft)] px-3 py-2.5 text-left last:border-b-0 hover:bg-[#f7faf8]"><MapPin className="mt-0.5 size-3.5 shrink-0 text-[var(--brand-deep)]" /><span className="min-w-0"><strong className="block truncate text-[11px] text-[var(--ink)]">{place.name}</strong><span className="mt-0.5 block truncate text-[9px] text-[var(--sub)]">{place.roadAddress || place.address}</span></span></button>)}
-          {!resultsQuery.isPending && resultsQuery.data?.length === 0 && <p className="px-3 py-4 text-center text-[10px] text-[var(--sub)]">검색 결과가 없습니다.</p>}
+          {(!resultsReady || resultsQuery.isPending) && <div className="space-y-2 p-3"><div className="h-10 animate-pulse rounded-lg bg-[#eef2ef]" /><div className="h-10 animate-pulse rounded-lg bg-[#eef2ef]" /></div>}
+          {resultsReady && resultsQuery.data?.map((place) => <button key={place.id} type="button" onClick={() => { onSelect(placeToRoutePoint(place)); setOpen(false); }} className="flex w-full items-start gap-2.5 border-b border-[var(--line-soft)] px-3 py-2.5 text-left last:border-b-0 hover:bg-[#f7faf8]"><MapPin className="mt-0.5 size-3.5 shrink-0 text-[var(--brand-deep)]" /><span className="min-w-0"><strong className="block truncate text-[11px] text-[var(--ink)]">{place.name}</strong><span className="mt-0.5 block truncate text-[9px] text-[var(--sub)]">{place.roadAddress || place.address}</span></span></button>)}
+          {resultsReady && !resultsQuery.isPending && resultsQuery.data?.length === 0 && <p className="px-3 py-4 text-center text-[10px] text-[var(--sub)]">검색 결과가 없습니다.</p>}
         </div>
       )}
     </div>
@@ -101,19 +103,26 @@ export function DirectionsPlanner({ initialDestination, backHref, facility }: {
   const [locationPending, setLocationPending] = useState(false);
   const [locationError, setLocationError] = useState("");
   const [routeRequest, setRouteRequest] = useState<RouteRequest | null>(null);
+  const locationGenerationRef = useRef(0);
   const activeRouteQuery = useQuery({
     queryKey: ["directions-active", routeRequest?.origin.latitude, routeRequest?.origin.longitude, routeRequest?.destination.latitude, routeRequest?.destination.longitude],
-    queryFn: () => fetchDirections(routeRequest!.origin, routeRequest!.destination),
+    queryFn: ({ signal }) => fetchDirections(routeRequest!.origin, routeRequest!.destination, signal),
     enabled: Boolean(routeRequest),
     retry: false,
     staleTime: 60_000,
   });
+
+  useEffect(() => () => {
+    locationGenerationRef.current += 1;
+  }, []);
 
   function clearRoute() {
     setRouteRequest(null);
   }
 
   function updateOriginValue(value: string) {
+    locationGenerationRef.current += 1;
+    setLocationPending(false);
     setOriginValue(value);
     setOrigin(null);
     setLocationError("");
@@ -127,28 +136,59 @@ export function DirectionsPlanner({ initialDestination, backHref, facility }: {
   }
 
   function useCurrentLocation() {
+    if (!window.isSecureContext && !["localhost", "127.0.0.1"].includes(window.location.hostname)) {
+      setLocationError("안전한 연결에서 위치 기능을 사용할 수 있습니다.");
+      return;
+    }
     if (!navigator.geolocation) {
       setLocationError("현재 위치를 사용할 수 없습니다.");
       return;
     }
+    const generation = ++locationGenerationRef.current;
+    let settled = false;
+    let failures = 0;
+    let denied = false;
     setLocationPending(true);
     setLocationError("");
-    navigator.geolocation.getCurrentPosition((position) => {
+    const succeed = (position: GeolocationPosition) => {
+      if (settled || generation !== locationGenerationRef.current) return;
+      const { latitude, longitude } = position.coords;
+      if (![latitude, longitude].every(Number.isFinite) || Math.abs(latitude) > 90 || Math.abs(longitude) > 180) {
+        fail();
+        return;
+      }
+      settled = true;
       const point: RoutePoint = {
         id: "current-location",
         name: "현재 위치",
         address: "기기 위치",
-        latitude: position.coords.latitude,
-        longitude: position.coords.longitude,
+        latitude,
+        longitude,
       };
       setOrigin(point);
       setOriginValue(point.name);
       setLocationPending(false);
       clearRoute();
-    }, () => {
-      setLocationError("위치 권한을 확인해 주세요.");
+    };
+    const fail = (error?: GeolocationPositionError) => {
+      if (settled || generation !== locationGenerationRef.current) return;
+      failures += 1;
+      denied ||= error?.code === error?.PERMISSION_DENIED;
+      if (failures < 2) return;
+      settled = true;
+      setLocationError(denied ? "위치 권한을 확인해 주세요." : "현재 위치를 확인할 수 없습니다.");
       setLocationPending(false);
-    }, { enableHighAccuracy: true, timeout: 8000, maximumAge: 30_000 });
+    };
+    try {
+      navigator.geolocation.getCurrentPosition(succeed, fail, { enableHighAccuracy: false, timeout: 2500, maximumAge: 60_000 });
+    } catch {
+      fail();
+    }
+    try {
+      navigator.geolocation.getCurrentPosition(succeed, fail, { enableHighAccuracy: true, timeout: 10_000, maximumAge: 0 });
+    } catch {
+      fail();
+    }
   }
 
   function requestRoute() {
@@ -183,7 +223,7 @@ export function DirectionsPlanner({ initialDestination, backHref, facility }: {
 
         <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto">
           <div className="space-y-3 p-4 sm:p-5">
-            <RouteField label="출발지" value={originValue} point={origin} onValueChange={updateOriginValue} onSelect={(point) => { setOrigin(point); setOriginValue(point.name); setLocationError(""); clearRoute(); }} onUseLocation={useCurrentLocation} locationPending={locationPending} />
+            <RouteField label="출발지" value={originValue} point={origin} onValueChange={updateOriginValue} onSelect={(point) => { locationGenerationRef.current += 1; setLocationPending(false); setOrigin(point); setOriginValue(point.name); setLocationError(""); clearRoute(); }} onUseLocation={useCurrentLocation} locationPending={locationPending} />
             <RouteField label="목적지" value={destinationValue} point={destination} onValueChange={updateDestinationValue} onSelect={(point) => { setDestination(point); setDestinationValue(point.name); clearRoute(); }} />
             {locationError && <p role="alert" className="text-[10px] font-semibold text-rose-600">{locationError}</p>}
           </div>
@@ -227,7 +267,7 @@ export function DirectionsPlanner({ initialDestination, backHref, facility }: {
 }
 
 export function DirectionsExperience({ id }: { id: string }) {
-  const facilityQuery = useQuery({ queryKey: ["facility", id], queryFn: () => fetchFacility(id), retry: false });
+  const facilityQuery = useQuery({ queryKey: ["facility", id], queryFn: ({ signal }) => fetchFacility(id, signal), retry: false });
 
   if (facilityQuery.isPending) return <div className="h-dvh animate-pulse bg-[#eef2ef]" />;
   if (facilityQuery.isError) {

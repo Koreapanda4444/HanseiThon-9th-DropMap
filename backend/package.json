@@ -11,7 +11,7 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit",
-    "data:check": "tsx src/data-import/cli.ts --dry-run --skip-openapi --skip-geocoding",
+    "data:check": "tsx src/data-import/cli.ts --dry-run --skip-geocoding",
     "data:import": "tsx src/data-import/cli.ts"
   },
   "dependencies": {

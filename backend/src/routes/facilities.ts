@@ -12,7 +12,10 @@ const optionalNumber = z.preprocess(
 const querySchema = z.object({
   categoryId: z.enum(facilityCategoryIds).optional(),
   query: z.string().trim().min(1).max(80).optional(),
-  ids: z.string().trim().max(4000).regex(/^\d+(\s*,\s*\d+)*$/).refine((value) => value.split(",").length <= 200).optional(),
+  ids: z.string().trim().max(4000).regex(/^\d+(\s*,\s*\d+)*$/).refine((value) => {
+    const ids = value.split(",").map((id) => Number(id.trim()));
+    return ids.length <= 200 && ids.every((id) => Number.isSafeInteger(id) && id > 0);
+  }).optional(),
   latitude: optionalNumber.pipe(z.number().min(-90).max(90).optional()),
   longitude: optionalNumber.pipe(z.number().min(-180).max(180).optional()),
   radiusM: optionalNumber.pipe(z.number().int().min(50).max(50000).optional()),
@@ -20,7 +23,7 @@ const querySchema = z.object({
   south: optionalNumber.pipe(z.number().min(-90).max(90).optional()),
   east: optionalNumber.pipe(z.number().min(-180).max(180).optional()),
   north: optionalNumber.pipe(z.number().min(-90).max(90).optional()),
-  limit: z.coerce.number().int().min(1).optional(),
+  limit: z.coerce.number().int().min(1).max(50_000).optional(),
 }).strict().superRefine((value, context) => {
   if ((value.latitude === undefined) !== (value.longitude === undefined)) {
     context.addIssue({ code: "custom", message: "latitude와 longitude는 함께 입력해야 합니다." });
@@ -29,9 +32,15 @@ const querySchema = z.object({
   if (bounds.some((item) => item !== undefined) && bounds.some((item) => item === undefined)) {
     context.addIssue({ code: "custom", message: "west, south, east, north는 함께 입력해야 합니다." });
   }
+  if (value.radiusM !== undefined && value.latitude === undefined) {
+    context.addIssue({ code: "custom", path: ["radiusM"], message: "반경 검색에는 위치가 필요합니다." });
+  }
+  if (bounds.every((item) => item !== undefined) && (value.west! >= value.east! || value.south! >= value.north!)) {
+    context.addIssue({ code: "custom", message: "지도 영역이 올바르지 않습니다." });
+  }
 });
 
-const idSchema = z.coerce.number().int().positive();
+const idSchema = z.coerce.number().int().positive().safe();
 
 const clusterQuerySchema = z.object({
   categoryId: z.enum(facilityCategoryIds).optional(),
@@ -48,7 +57,7 @@ export async function facilityRoutes(app: FastifyInstance) {
     const parsed = querySchema.parse(request.query);
     const { ids: idsParam, ...filters } = parsed;
     const ids = idsParam
-      ? idsParam.split(",").map((id) => id.trim())
+      ? idsParam.split(",").map((id) => String(Number(id.trim())))
       : undefined;
     return {
       facilities: await findFacilities({

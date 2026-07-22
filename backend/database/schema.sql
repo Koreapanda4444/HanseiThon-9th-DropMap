@@ -33,7 +33,7 @@ CREATE TABLE facility_categories (
   category_id VARCHAR2(20 CHAR) NOT NULL,
   CONSTRAINT facility_categories_pk PRIMARY KEY (facility_id, category_id),
   CONSTRAINT facility_categories_facility_fk FOREIGN KEY (facility_id) REFERENCES facilities(id) ON DELETE CASCADE,
-  CONSTRAINT facility_categories_id_ck CHECK (category_id IN ('general', 'recycle', 'medicine', 'battery', 'clothes', 'cigarette', 'electronics'))
+  CONSTRAINT facility_categories_id_ck CHECK (category_id IN ('general', 'recycle', 'medicine', 'battery', 'clothes', 'cigarette'))
 );
 
 CREATE TABLE facility_accepted_items (
@@ -52,7 +52,7 @@ CREATE TABLE waste_items (
   active NUMBER(1) DEFAULT 1 NOT NULL,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
-  CONSTRAINT waste_items_category_ck CHECK (category_id IN ('general', 'recycle', 'medicine', 'battery', 'clothes', 'cigarette', 'electronics')),
+  CONSTRAINT waste_items_category_ck CHECK (category_id IN ('general', 'recycle', 'medicine', 'battery', 'clothes', 'cigarette')),
   CONSTRAINT waste_items_active_ck CHECK (active IN (0, 1))
 );
 

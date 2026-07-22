@@ -26,6 +26,10 @@ export async function buildApp() {
           "currentPassword",
           "newPassword",
           "image",
+          "req.body.password",
+          "req.body.currentPassword",
+          "req.body.newPassword",
+          "req.body.image",
         ],
         censor: "[REDACTED]",
       },
@@ -88,7 +92,8 @@ export async function buildApp() {
     reply.header("X-Request-Id", String(request.id));
     reply.header("X-Robots-Tag", "noindex, nofollow");
     const stateChanging = !["GET", "HEAD", "OPTIONS"].includes(request.method);
-    if (request.url.startsWith("/api/auth/") || stateChanging) {
+    const privateRequest = request.url.startsWith("/api/auth/") || request.url.startsWith("/api/reports");
+    if (privateRequest || stateChanging) {
       reply.header("Cache-Control", "no-store");
       reply.header("Pragma", "no-cache");
     }
@@ -156,7 +161,7 @@ export async function buildApp() {
     });
   });
 
-  app.setNotFoundHandler((request, reply) => {
+  app.setNotFoundHandler((_request, reply) => {
     return reply.status(404).send({
       error: { code: "ROUTE_NOT_FOUND", message: "요청한 API 경로를 찾을 수 없습니다." },
     });

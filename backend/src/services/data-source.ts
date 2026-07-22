@@ -1,6 +1,6 @@
 import { oracleConfigured } from "../config/env.js";
 import { initializeLocalStore } from "../data-import/local-store.js";
-import { checkDatabase, closeDatabase } from "../database/oracle.js";
+import { checkDatabase } from "../database/oracle.js";
 import { AppError } from "../errors.js";
 
 export type DataSourceMode = "oracle" | "local" | "unavailable";
@@ -42,19 +42,6 @@ export async function initializeDataSource() {
   await initialization;
 }
 
-async function switchToLocal() {
-  console.error("Oracle operation failed; switching data source");
-  database = {
-    configured: oracleConfigured,
-    connected: false,
-    state: oracleConfigured ? "disconnected" : "unconfigured",
-  };
-  await closeDatabase().catch(() => {
-    console.error("Oracle pool close failed");
-  });
-  await activateLocalStore();
-}
-
 function dataUnavailable() {
   return new AppError(
     "현재 데이터를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.",
@@ -73,7 +60,7 @@ export async function runWithDataSource<T>(
       return await oracleWork();
     } catch (error) {
       if (error instanceof AppError && error.statusCode < 500) throw error;
-      await switchToLocal();
+      throw dataUnavailable();
     }
   }
   if (mode === "local") {

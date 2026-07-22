@@ -1,15 +1,15 @@
 import { setTimeout as delay } from "node:timers/promises";
+import { z } from "zod";
+import { readLimitedResponseText } from "../services/http-response.js";
 import { cleanText, parseKoreanCoordinates, uniqueText } from "./normalize.js";
 import type { FacilityImportRecord } from "./types.js";
 
-interface KakaoAddressDocument {
-  x?: string;
-  y?: string;
-}
-
-interface KakaoAddressResponse {
-  documents?: KakaoAddressDocument[];
-}
+const responseSchema = z.object({
+  documents: z.array(z.object({
+    x: z.string().max(40).optional(),
+    y: z.string().max(40).optional(),
+  })).max(30).default([]),
+});
 
 interface Coordinates {
   latitude: number;
@@ -30,10 +30,19 @@ async function requestAddress(query: string, apiKey: string) {
   const response = await fetch(url, {
     headers: { Authorization: `KakaoAK ${apiKey}` },
     signal: AbortSignal.timeout(10_000),
+    redirect: "error",
   });
   if (!response.ok) throw new Error(`Kakao 주소 검색 HTTP ${response.status}`);
-  const payload = await response.json() as KakaoAddressResponse;
-  const document = payload.documents?.[0];
+  const text = await readLimitedResponseText(response, 512 * 1024);
+  let payload: unknown;
+  try {
+    payload = JSON.parse(text);
+  } catch {
+    throw new Error("Kakao 주소 검색 응답이 올바르지 않습니다.");
+  }
+  const parsed = responseSchema.safeParse(payload);
+  if (!parsed.success) throw new Error("Kakao 주소 검색 응답이 올바르지 않습니다.");
+  const document = parsed.data.documents[0];
   if (!document) return null;
   const coordinates = parseKoreanCoordinates(document.y, document.x);
   if (coordinates.latitude === null || coordinates.longitude === null) return null;

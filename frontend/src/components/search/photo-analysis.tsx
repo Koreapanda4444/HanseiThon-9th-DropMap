@@ -29,7 +29,7 @@ export function PhotoAnalysisFlow({ image, onClose, onRetake, onOpenMap }: {
 }) {
   const analysis = useQuery({
     queryKey: ["image-analysis", image.id],
-    queryFn: () => analyzeImage(image.dataUrl),
+    queryFn: ({ signal }) => analyzeImage(image.dataUrl, signal),
     retry: false,
     staleTime: Infinity,
   });
@@ -40,12 +40,14 @@ export function PhotoAnalysisFlow({ image, onClose, onRetake, onOpenMap }: {
   const [panelOpen, setPanelOpen] = useState(false);
   const [phase, setPhase] = useState<"review" | "guide">("review");
   const lastTapRef = useRef<{ id: string; at: number } | null>(null);
+  const correctionVersionRef = useRef(new Map<string, number>());
 
   const items = editedItems ?? analysis.data ?? [];
   const selected = items.find((item) => item.id === selectedId) ?? items[0] ?? null;
   const correction = useMutation({
-    mutationFn: async ({ itemId, name }: { itemId: string; name: string }) => ({ itemId, results: await classifyWaste(name) }),
-    onSuccess: ({ itemId, results }) => {
+    mutationFn: async ({ itemId, name, version }: { itemId: string; name: string; version: number }) => ({ itemId, version, results: await classifyWaste(name) }),
+    onSuccess: ({ itemId, version, results }) => {
+      if (correctionVersionRef.current.get(itemId) !== version) return;
       const result = results[0];
       if (!result) return;
       setEditedItems((current) => (current ?? analysis.data ?? []).map((item) => item.id === itemId ? { ...item, categoryId: result.categoryId, confidence: result.confidence, disposalTip: result.disposalTip } : item));
@@ -69,7 +71,9 @@ export function PhotoAnalysisFlow({ image, onClose, onRetake, onOpenMap }: {
     const nextName = editingValue.trim();
     if (nextName) {
       setEditedItems(items.map((item) => item.id === itemId ? { ...item, name: nextName } : item));
-      correction.mutate({ itemId, name: nextName });
+      const version = (correctionVersionRef.current.get(itemId) ?? 0) + 1;
+      correctionVersionRef.current.set(itemId, version);
+      correction.mutate({ itemId, name: nextName, version });
     }
     setEditingId(null);
     setEditingValue("");
@@ -132,7 +136,7 @@ export function PhotoAnalysisFlow({ image, onClose, onRetake, onOpenMap }: {
                 const category = CATEGORY_BY_ID[item.categoryId];
                 const active = selected?.id === item.id;
                 return (
-                  <div key={item.id} role="button" tabIndex={0} aria-pressed={active} onClick={(event) => selectItem(item, event.timeStamp)} onDoubleClick={() => beginEditing(item)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") selectItem(item, event.timeStamp); }} className={cn("flex cursor-pointer items-center gap-3 rounded-xl border bg-white p-3 outline-none transition", active ? "border-[var(--brand)] shadow-sm" : "border-[var(--line)] hover:border-[#c7d2cc]")}>
+                  <div key={item.id} role="button" tabIndex={0} aria-pressed={active} onClick={(event) => selectItem(item, event.timeStamp)} onDoubleClick={() => beginEditing(item)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); selectItem(item, event.timeStamp); } }} className={cn("flex cursor-pointer items-center gap-3 rounded-xl border bg-white p-3 outline-none transition", active ? "border-[var(--brand)] shadow-sm" : "border-[var(--line)] hover:border-[#c7d2cc]")}>
                     <span className="grid size-9 shrink-0 place-items-center rounded-lg" style={{ color: category.color, backgroundColor: category.softColor }}><CategoryIcon categoryId={category.id} className="size-4.5" /></span>
                     <div className="min-w-0 flex-1">
                       {editingId === item.id ? <div className="flex items-center gap-1.5" onClick={(event) => event.stopPropagation()}><input value={editingValue} onChange={(event) => setEditingValue(event.target.value)} onBlur={() => saveName(item.id)} onKeyDown={(event) => handleEditKey(event, item.id)} autoFocus maxLength={80} className="h-8 min-w-0 flex-1 rounded-lg border border-[var(--brand)] px-2 text-[11px] font-bold outline-none" /><button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => saveName(item.id)} className="grid size-8 place-items-center rounded-lg bg-[var(--brand)] text-white"><Check className="size-3.5" /></button></div> : <><div className="flex items-center gap-1.5"><strong className="truncate text-[11px] text-[var(--ink)]">{item.name}</strong><Pencil className="size-3 shrink-0 text-[var(--faint)]" /></div><p className="mt-1 text-[9px] font-bold" style={{ color: category.color }}>{category.shortLabel} · {Math.round(item.confidence * 100)}%</p></>}

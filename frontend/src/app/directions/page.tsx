@@ -11,6 +11,6 @@ export default async function PlaceDirectionsPage({ searchParams }: { searchPara
   const address = text(params.address).trim();
   const latitude = Number(text(params.latitude));
   const longitude = Number(text(params.longitude));
-  if (!name || !Number.isFinite(latitude) || !Number.isFinite(longitude) || latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) notFound();
+  if (!name || name.length > 200 || address.length > 500 || !Number.isFinite(latitude) || !Number.isFinite(longitude) || latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) notFound();
   return <DirectionsPlanner backHref="/" initialDestination={{ id: `place-${latitude}-${longitude}`, name, address, latitude, longitude }} />;
 }

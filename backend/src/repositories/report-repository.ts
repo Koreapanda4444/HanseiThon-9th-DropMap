@@ -61,6 +61,7 @@ async function listOracleReports(userId: string) {
       FROM user_reports
       WHERE user_id = :userId
       ORDER BY created_at DESC
+      FETCH FIRST 200 ROWS ONLY
     `, { userId });
     return (result.rows ?? []).map(toReport);
   });
@@ -77,6 +78,7 @@ function listLocalReports(userId: string) {
   return readLocalAccountData((data) => data.reports
     .filter((report) => report.userId === userId)
     .sort((first, second) => Date.parse(second.createdAt) - Date.parse(first.createdAt))
+    .slice(0, 200)
     .map((report) => ({ ...report })));
 }
 

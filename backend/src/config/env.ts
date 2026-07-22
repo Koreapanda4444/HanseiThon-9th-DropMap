@@ -1,7 +1,6 @@
 import { config } from "dotenv";
 import { z } from "zod";
 
-config({ path: ".env.local", quiet: true });
 config({ path: ".env", quiet: true });
 
 const emptyToUndefined = (value: unknown) => (
@@ -63,12 +62,12 @@ const schema = z.object({
   ORACLE_USER: optionalText,
   ORACLE_PASSWORD: optionalText,
   ORACLE_SERVICE_NAME: z.preprocess(emptyToUndefined, z.string().trim().regex(/^[A-Za-z0-9._-]+$/).optional()),
-  ORACLE_POOL_MIN: numberWithDefault(1, 0),
-  ORACLE_POOL_MAX: numberWithDefault(5, 1),
-  ORACLE_POOL_INCREMENT: numberWithDefault(1, 1),
+  ORACLE_POOL_MIN: numberWithDefault(1, 0, 100),
+  ORACLE_POOL_MAX: numberWithDefault(5, 1, 100),
+  ORACLE_POOL_INCREMENT: numberWithDefault(1, 1, 100),
   KAKAO_REST_API_KEY: optionalText,
   KAKAO_NATIVE_APP_KEY: optionalText,
-  PUBLIC_DATA_SERVICE_KEY: optionalText,
+  IMPORT_CSV_DIR: optionalText,
   LOCAL_ACCOUNT_FILE: optionalText,
   NEKOS_API_KEY: optionalText,
   NEKOS_BASE_URL: textWithDefault("https://codex.nekos.me/v1").refine((value) => {
@@ -79,6 +78,13 @@ const schema = z.object({
     }
   }),
   NEKOS_VISION_MODEL: textWithDefault("gpt-5.4-mini"),
+}).superRefine((value, context) => {
+  if (value.ORACLE_POOL_MIN > value.ORACLE_POOL_MAX) {
+    context.addIssue({ code: "custom", path: ["ORACLE_POOL_MIN"], message: "ORACLE_POOL_MIN must not exceed ORACLE_POOL_MAX" });
+  }
+  if (value.ORACLE_POOL_INCREMENT > value.ORACLE_POOL_MAX) {
+    context.addIssue({ code: "custom", path: ["ORACLE_POOL_INCREMENT"], message: "ORACLE_POOL_INCREMENT must not exceed ORACLE_POOL_MAX" });
+  }
 });
 
 export const env = schema.parse(process.env);

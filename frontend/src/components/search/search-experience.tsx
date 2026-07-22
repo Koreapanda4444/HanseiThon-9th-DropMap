@@ -75,16 +75,16 @@ export function SearchExperience({ initialQuery = "" }: { initialQuery?: string 
   const clearRecentSearches = useAppStore((state) => state.clearRecentSearches);
   const setSelectedCategoryId = useAppStore((state) => state.setSelectedCategoryId);
   const classification = useMutation({ mutationFn: classifyWaste });
-  const availableItems = useQuery({ queryKey: ["waste-items"], queryFn: fetchWasteItems });
+  const availableItems = useQuery({ queryKey: ["waste-items"], queryFn: ({ signal }) => fetchWasteItems(signal) });
   const primaryResult = classification.data?.[0];
   const relatedFacilities = useQuery({
     queryKey: ["nearby-facilities", primaryResult?.categoryId, userLocation?.latitude, userLocation?.longitude],
-    queryFn: () => fetchFacilities({
+    queryFn: ({ signal }) => fetchFacilities({
       categoryId: primaryResult?.categoryId,
       latitude: userLocation?.latitude,
       longitude: userLocation?.longitude,
       limit: 3,
-    }),
+    }, signal),
     enabled: Boolean(primaryResult && userLocation),
   });
 
@@ -96,7 +96,7 @@ export function SearchExperience({ initialQuery = "" }: { initialQuery?: string 
   }, []);
 
   const requestCurrentLocation = useCallback(() => {
-    if (!navigator.geolocation) {
+    if ((!window.isSecureContext && !["localhost", "127.0.0.1"].includes(window.location.hostname)) || !navigator.geolocation) {
       setLocationStatus("unavailable");
       return;
     }
@@ -107,12 +107,14 @@ export function SearchExperience({ initialQuery = "" }: { initialQuery?: string 
     setLocationStatus("loading");
     const update = (position: GeolocationPosition, highAccuracy: boolean) => {
       if (generation !== locationGenerationRef.current) return;
+      const { latitude, longitude } = position.coords;
+      if (![latitude, longitude].every(Number.isFinite) || Math.abs(latitude) > 90 || Math.abs(longitude) > 180) return;
       if (position.timestamp < latestTimestamp) return;
       latestTimestamp = position.timestamp;
       received = true;
       setUserLocation({
-        latitude: position.coords.latitude,
-        longitude: position.coords.longitude,
+        latitude,
+        longitude,
       });
       setLocationStatus("ready");
       if (highAccuracy && position.coords.accuracy <= 40) stopLocationTracking();
@@ -123,16 +125,24 @@ export function SearchExperience({ initialQuery = "" }: { initialQuery?: string 
       setUserLocation(null);
       setLocationStatus("unavailable");
     };
-    navigator.geolocation.getCurrentPosition((position) => update(position, false), fail, {
-      enableHighAccuracy: false,
-      timeout: 3500,
-      maximumAge: 300_000,
-    });
-    locationWatchRef.current = navigator.geolocation.watchPosition((position) => update(position, true), fail, {
-      enableHighAccuracy: true,
-      timeout: 15_000,
-      maximumAge: 0,
-    });
+    try {
+      navigator.geolocation.getCurrentPosition((position) => update(position, false), fail, {
+        enableHighAccuracy: false,
+        timeout: 3500,
+        maximumAge: 300_000,
+      });
+      locationWatchRef.current = navigator.geolocation.watchPosition((position) => update(position, true), fail, {
+        enableHighAccuracy: true,
+        timeout: 15_000,
+        maximumAge: 0,
+      });
+    } catch {
+      locationGenerationRef.current += 1;
+      stopLocationTracking();
+      setUserLocation(null);
+      setLocationStatus("unavailable");
+      return;
+    }
     locationTimerRef.current = window.setTimeout(() => {
       if (generation !== locationGenerationRef.current) return;
       stopLocationTracking();
@@ -222,7 +232,7 @@ export function SearchExperience({ initialQuery = "" }: { initialQuery?: string 
         <section className="mt-5 rounded-[18px] border border-[var(--line)] bg-white p-3 sm:p-4">
           <form onSubmit={handleSubmit} className="flex h-13 items-center rounded-xl border border-[#d9e0dc] bg-[#f8faf9] px-3 transition focus-within:border-[var(--brand)] focus-within:bg-white focus-within:ring-3 focus-within:ring-[var(--brand)]/10">
             <Search className="size-5 shrink-0 text-[#68746e]" />
-            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="예: 보조배터리, 형광등, 감기약" aria-label="버릴 품목 검색" className="h-full min-w-0 flex-1 bg-transparent px-3 text-[14px] font-semibold text-[var(--ink)] outline-none placeholder:text-[#9aa39f]" />
+            <input value={query} onChange={(event) => setQuery(event.target.value)} maxLength={200} placeholder="예: 보조배터리, 형광등, 감기약" aria-label="버릴 품목 검색" className="h-full min-w-0 flex-1 bg-transparent px-3 text-[14px] font-semibold text-[var(--ink)] outline-none placeholder:text-[#9aa39f]" />
             {query && <button type="button" onClick={() => setQuery("")} aria-label="검색어 지우기" className="grid size-8 shrink-0 place-items-center rounded-full text-[#89938e] hover:bg-white"><X className="size-4" /></button>}
             <button type="submit" disabled={classification.isPending || !query.trim()} className="ml-1 flex h-9 shrink-0 items-center gap-1.5 rounded-lg bg-[var(--brand)] px-4 text-[12px] font-extrabold text-white disabled:bg-[#b6c3bd]">{classification.isPending && <LoaderCircle className="size-3.5 animate-spin" />}검색</button>
           </form>

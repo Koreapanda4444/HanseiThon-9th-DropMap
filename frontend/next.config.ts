@@ -12,11 +12,11 @@ function apiOrigin() {
 
 const contentSecurityPolicy = [
   "default-src 'self'",
-  `script-src 'self' 'unsafe-inline'${development ? " 'unsafe-eval'" : ""} https://dapi.kakao.com https://t1.daumcdn.net https://*.daumcdn.net`,
+  `script-src 'self' 'unsafe-inline'${development ? " 'unsafe-eval'" : ""} https://dapi.kakao.com https://t1.daumcdn.net https://*.daumcdn.net https://*.kakaocdn.net`,
   "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data: blob: https:",
+  `img-src 'self' data: blob: https:${development ? " http://*.daumcdn.net http://*.daum.net http://*.kakao.com" : ""}`,
   "font-src 'self' data:",
-  `connect-src 'self' ${development ? "http:" : apiOrigin()} https://dapi.kakao.com https://*.kakao.com https://*.daum.net https://*.daumcdn.net${development ? " ws: wss:" : ""}`,
+  `connect-src 'self' ${development ? "http:" : apiOrigin()} https://dapi.kakao.com https://*.kakao.com https://*.daum.net https://*.daumcdn.net https://*.kakaocdn.net${development ? " ws: wss:" : ""}`,
   "media-src 'self' blob:",
   "worker-src 'self' blob:",
   "manifest-src 'self'",

@@ -1,7 +1,6 @@
 "use client";
 
 import { LoaderCircle, MapPin } from "lucide-react";
-import Script from "next/script";
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { CATEGORY_BY_ID, getPrimaryCategory } from "@/config/facility-categories";
 import { cn } from "@/lib/utils";
@@ -63,6 +62,8 @@ type KakaoPointInstance = object;
 interface KakaoMarkerInstance {
   setMap: (map: KakaoMapInstance | null) => void;
   setImage: (image: KakaoMarkerImageInstance) => void;
+  setPosition: (position: KakaoLatLng) => void;
+  setTitle: (title: string) => void;
 }
 
 interface KakaoOverlayInstance {
@@ -83,6 +84,8 @@ interface KakaoLatLngBounds {
 
 interface KakaoMapsApi {
   load: (callback: () => void) => void;
+  version?: string;
+  readyState?: number;
   LatLng: new (latitude: number, longitude: number) => KakaoLatLng;
   Size: new (width: number, height: number) => KakaoSizeInstance;
   Point: new (x: number, y: number) => KakaoPointInstance;
@@ -99,6 +102,7 @@ interface KakaoMapsApi {
   };
   event: {
     addListener: (target: KakaoMapInstance | KakaoMarkerInstance, event: string, callback: () => void) => void;
+    removeListener: (target: KakaoMapInstance | KakaoMarkerInstance, event: string, callback: () => void) => void;
   };
 }
 
@@ -125,10 +129,129 @@ interface MarkerEntry {
   facility: Facility;
   marker: KakaoMarkerInstance;
   categoryId: FacilityCategoryId;
+  clickHandler: () => void;
 }
 
 const emptyRoutePath: MapPoint[] = [];
 const emptyClusters: FacilityCluster[] = [];
+const kakaoSdkId = "kakao-map-sdk";
+const kakaoMainSdkId = "kakao-map-main-sdk";
+let kakaoSdkPromise: Promise<KakaoMapsApi> | null = null;
+
+function normalizeLocalMapOrigin() {
+  if (process.env.NODE_ENV !== "development" || window.location.port !== "3000") return false;
+  if (!["127.0.0.1", "0.0.0.0", "[::1]"].includes(window.location.hostname)) return false;
+  const url = new URL(window.location.href);
+  url.hostname = "localhost";
+  window.location.replace(url);
+  return true;
+}
+
+function loadKakaoMapsSdk(appKey: string) {
+  const currentMaps = window.kakao?.maps;
+  if (currentMaps && typeof currentMaps.Map === "function") return Promise.resolve(currentMaps);
+  if (kakaoSdkPromise) return kakaoSdkPromise;
+
+  const source = `https://dapi.kakao.com/v2/maps/sdk.js?appkey=${encodeURIComponent(appKey)}&autoload=false`;
+  const task = new Promise<KakaoMapsApi>((resolve, reject) => {
+    let script = document.getElementById(kakaoSdkId) as HTMLScriptElement | null;
+    let mainScript = document.getElementById(kakaoMainSdkId) as HTMLScriptElement | null;
+    let timeoutId: number | null = null;
+    let settled = false;
+
+    const cleanup = () => {
+      if (timeoutId !== null) window.clearTimeout(timeoutId);
+      script?.removeEventListener("load", activate);
+      script?.removeEventListener("error", handleError);
+      mainScript?.removeEventListener("load", handleMainLoad);
+      mainScript?.removeEventListener("error", handleMainError);
+    };
+    const fail = (code: string) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      script?.remove();
+      mainScript?.remove();
+      reject(new Error(code));
+    };
+    const succeed = (maps: KakaoMapsApi) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(maps);
+    };
+    const handleMainLoad = () => {
+      const maps = window.kakao?.maps;
+      if (!maps || typeof maps.Map !== "function") {
+        fail("KAKAO_MAP_MODULE_UNAVAILABLE");
+        return;
+      }
+      maps.readyState = 2;
+      try {
+        maps.load(() => succeed(maps));
+      } catch {
+        succeed(maps);
+      }
+    };
+    const handleMainError = () => fail("KAKAO_MAP_MODULE_REQUEST_FAILED");
+    const activate = () => {
+      const maps = window.kakao?.maps;
+      if (!maps || typeof maps.load !== "function") {
+        fail("KAKAO_SDK_INVALID");
+        return;
+      }
+      if (typeof maps.Map === "function") {
+        succeed(maps);
+        return;
+      }
+      const version = maps.version;
+      if (!version || !/^\d+\.\d+\.\d+$/.test(version)) {
+        fail("KAKAO_MAP_VERSION_UNAVAILABLE");
+        return;
+      }
+      const mainSource = `https://t1.daumcdn.net/mapjsapi/js/main/${version}/kakao.js`;
+      if (mainScript && mainScript.src !== mainSource) {
+        mainScript.remove();
+        mainScript = null;
+      }
+      const shouldAppend = !mainScript;
+      if (!mainScript) {
+        mainScript = document.createElement("script");
+        mainScript.id = kakaoMainSdkId;
+        mainScript.src = mainSource;
+        mainScript.async = true;
+      }
+      mainScript.addEventListener("load", handleMainLoad, { once: true });
+      mainScript.addEventListener("error", handleMainError, { once: true });
+      if (shouldAppend) document.head.appendChild(mainScript);
+    };
+    const handleError = () => fail("KAKAO_SDK_REQUEST_FAILED");
+
+    timeoutId = window.setTimeout(() => fail("KAKAO_SDK_TIMEOUT"), 15_000);
+    if (script) {
+      if (window.kakao?.maps) activate();
+      else {
+        script.addEventListener("load", activate, { once: true });
+        script.addEventListener("error", handleError, { once: true });
+      }
+      return;
+    }
+
+    script = document.createElement("script");
+    script.id = kakaoSdkId;
+    script.src = source;
+    script.async = true;
+    script.addEventListener("load", activate, { once: true });
+    script.addEventListener("error", handleError, { once: true });
+    document.head.appendChild(script);
+  });
+
+  kakaoSdkPromise = task.catch((error) => {
+    kakaoSdkPromise = null;
+    throw error;
+  });
+  return kakaoSdkPromise;
+}
 
 function visibleClusterCount(count: number) {
   return count >= 99 ? "99+" : String(count);
@@ -145,6 +268,14 @@ function distanceBetween(first: MapPoint, second: MapPoint) {
   return earthRadiusM * 2 * Math.atan2(Math.sqrt(value), Math.sqrt(1 - value));
 }
 
+function validMapPoint(point: MapPoint | null | undefined): point is MapPoint {
+  return Boolean(point
+    && Number.isFinite(point.latitude)
+    && Number.isFinite(point.longitude)
+    && Math.abs(point.latitude) <= 90
+    && Math.abs(point.longitude) <= 180);
+}
+
 const markerIconPaths: Record<FacilityCategoryId, string> = {
   general: '<path d="M10 11v6"/><path d="M14 11v6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
   recycle: '<path d="M7 19H4.815a1.83 1.83 0 0 1-1.57-.881 1.785 1.785 0 0 1-.004-1.784L7.196 9.5"/><path d="M11 19h8.203a1.83 1.83 0 0 0 1.556-.89 1.784 1.784 0 0 0 0-1.775l-1.226-2.12"/><path d="m14 16-3 3 3 3"/><path d="M8.293 13.596 7.196 9.5 3.1 10.598"/><path d="m9.344 5.811 1.093-1.892A1.83 1.83 0 0 1 11.985 3a1.784 1.784 0 0 1 1.546.888l3.943 6.843"/><path d="m13.378 9.633 4.096 1.098 1.097-4.096"/>',
@@ -152,7 +283,6 @@ const markerIconPaths: Record<FacilityCategoryId, string> = {
   battery: '<path d="m11 7-3 5h4l-3 5"/><path d="M14.856 6H16a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2.935"/><path d="M22 14v-4"/><path d="M5.14 18H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h2.936"/>',
   clothes: '<path d="M20.38 3.46 16 2a4 4 0 0 1-8 0L3.62 3.46a2 2 0 0 0-1.34 2.23l.58 3.47a1 1 0 0 0 .99.84H6v10c0 1.1.9 2 2 2h8a2 2 0 0 0 2-2V10h2.15a1 1 0 0 0 .99-.84l.58-3.47a2 2 0 0 0-1.34-2.23z"/>',
   cigarette: '<path d="M17 12H3a1 1 0 0 0-1 1v2a1 1 0 0 0 1 1h14"/><path d="M18 8c0-2.5-2-2.5-2-5"/><path d="M21 16a1 1 0 0 0 1-1v-2a1 1 0 0 0-1-1"/><path d="M22 8c0-2.5-2-2.5-2-5"/><path d="M7 12v4"/>',
-  electronics: '<path d="M6.3 20.3a2.4 2.4 0 0 0 3.4 0L12 18l-6-6-2.3 2.3a2.4 2.4 0 0 0 0 3.4Z"/><path d="m2 22 3-3"/><path d="M7.5 13.5 10 11"/><path d="M10.5 16.5 13 14"/><path d="m18 3-4 4h6l-4 4"/>',
 };
 
 function markerSource(categoryId: FacilityCategoryId) {
@@ -247,6 +377,8 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<KakaoMapInstance | null>(null);
   const markerBuildFrameRef = useRef<number | null>(null);
+  const focusFrameRef = useRef<number | null>(null);
+  const initialViewportTimerRef = useRef<number | null>(null);
   const markerGenerationRef = useRef(0);
   const markerRegistryRef = useRef(new Map<string, MarkerEntry>());
   const markerImagesRef = useRef(new Map<FacilityCategoryId, KakaoMarkerImageInstance>());
@@ -267,6 +399,7 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
   const hybridRef = useRef(false);
   const [mapReady, setMapReady] = useState(false);
   const [scriptFailed, setScriptFailed] = useState(false);
+  const [loadAttempt, setLoadAttempt] = useState(0);
   const appKey = process.env.NEXT_PUBLIC_KAKAO_MAP_APP_KEY;
 
   useEffect(() => {
@@ -276,30 +409,33 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
   }, [onLocationChange, onSelect, onViewportChange]);
 
   useEffect(() => {
-    if (userLocation && !lastLocationRef.current) {
+    if (validMapPoint(userLocation) && !lastLocationRef.current) {
       lastLocationRef.current = { point: userLocation, timestamp: Date.now() };
     }
   }, [userLocation]);
 
   const reportViewport = useCallback(() => {
     const map = mapInstanceRef.current;
-    if (!map) return;
+    const callback = viewportRef.current;
+    if (!map || !callback) return;
     const bounds = map.getBounds();
     const southWest = bounds.getSouthWest();
     const northEast = bounds.getNorthEast();
     const container = mapContainerRef.current;
-    viewportRef.current?.({
-      west: Math.min(180, Math.max(-180, Number(southWest.getLng().toFixed(5)))),
-      south: Math.min(90, Math.max(-90, Number(southWest.getLat().toFixed(5)))),
-      east: Math.min(180, Math.max(-180, Number(northEast.getLng().toFixed(5)))),
-      north: Math.min(90, Math.max(-90, Number(northEast.getLat().toFixed(5)))),
-      level: map.getLevel(),
-      width: container?.clientWidth ?? 0,
-      height: container?.clientHeight ?? 0,
-    });
+    const raw = [southWest.getLng(), southWest.getLat(), northEast.getLng(), northEast.getLat(), map.getLevel()];
+    const width = container?.clientWidth ?? 0;
+    const height = container?.clientHeight ?? 0;
+    if (!raw.every(Number.isFinite) || width <= 0 || height <= 0) return;
+    const west = Math.min(180, Math.max(-180, Number(raw[0]!.toFixed(5))));
+    const south = Math.min(90, Math.max(-90, Number(raw[1]!.toFixed(5))));
+    const east = Math.min(180, Math.max(-180, Number(raw[2]!.toFixed(5))));
+    const north = Math.min(90, Math.max(-90, Number(raw[3]!.toFixed(5))));
+    if (west >= east || south >= north) return;
+    callback({ west, south, east, north, level: Math.max(1, Math.round(raw[4]!)), width, height });
   }, []);
 
   const focusLocation = useCallback((point: MapPoint) => {
+    if (!validMapPoint(point)) return;
     const map = mapInstanceRef.current;
     const maps = window.kakao?.maps;
     if (!map || !maps) {
@@ -312,7 +448,9 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
     map.setCenter(position);
     if (map.getLevel() > 4) map.setLevel(4, { animate: false });
     map.setCenter(position);
-    window.requestAnimationFrame(() => {
+    if (focusFrameRef.current !== null) window.cancelAnimationFrame(focusFrameRef.current);
+    focusFrameRef.current = window.requestAnimationFrame(() => {
+      focusFrameRef.current = null;
       const currentMap = mapInstanceRef.current;
       if (!currentMap) return;
       currentMap.relayout();
@@ -322,10 +460,9 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
   }, [reportViewport]);
 
   const initializeMap = useCallback(() => {
-    if (!mapContainerRef.current || !window.kakao || mapInstanceRef.current) return;
-    window.kakao.maps.load(() => {
-      const maps = window.kakao?.maps;
-      if (!maps || !mapContainerRef.current || mapInstanceRef.current || typeof maps.Map !== "function") return;
+    const maps = window.kakao?.maps;
+    if (!maps || !mapContainerRef.current || mapInstanceRef.current || typeof maps.Map !== "function") return;
+    try {
       const map = new maps.Map(mapContainerRef.current, {
         center: new maps.LatLng(37.5665, 126.978),
         level: 7,
@@ -335,24 +472,62 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
       maps.event.addListener(map, "idle", reportViewport);
       setMapReady(true);
       if (pendingLocationFocusRef.current) focusLocation(pendingLocationFocusRef.current);
-      window.setTimeout(reportViewport, 0);
-    });
+      initialViewportTimerRef.current = window.setTimeout(() => {
+        initialViewportTimerRef.current = null;
+        reportViewport();
+      }, 0);
+    } catch (error) {
+      console.error("Kakao map initialization failed", error);
+      setScriptFailed(true);
+    }
   }, [focusLocation, reportViewport]);
 
   useEffect(() => {
-    if (window.kakao) initializeMap();
-  }, [initializeMap]);
+    if (!appKey || normalizeLocalMapOrigin()) return;
+    let active = true;
+    setScriptFailed(false);
+    loadKakaoMapsSdk(appKey)
+      .then(() => {
+        if (active) initializeMap();
+      })
+      .catch((error) => {
+        if (!active) return;
+        console.error("Kakao Maps SDK load failed", error);
+        setScriptFailed(true);
+      });
+    return () => {
+      active = false;
+    };
+  }, [appKey, initializeMap, loadAttempt]);
 
   useEffect(() => () => {
     locationGenerationRef.current += 1;
+    markerGenerationRef.current += 1;
     if (markerBuildFrameRef.current !== null) window.cancelAnimationFrame(markerBuildFrameRef.current);
+    if (focusFrameRef.current !== null) window.cancelAnimationFrame(focusFrameRef.current);
+    if (initialViewportTimerRef.current !== null) window.clearTimeout(initialViewportTimerRef.current);
     if (locationWatchRef.current !== null) navigator.geolocation?.clearWatch(locationWatchRef.current);
     if (locationStopTimerRef.current !== null) window.clearTimeout(locationStopTimerRef.current);
-    markerRegistryRef.current.forEach(({ marker }) => marker.setMap(null));
+    const maps = window.kakao?.maps;
+    const map = mapInstanceRef.current;
+    if (maps && map) {
+      maps.event.removeListener(map, "zoom_changed", reportViewport);
+      maps.event.removeListener(map, "idle", reportViewport);
+    }
+    markerRegistryRef.current.forEach(({ marker, clickHandler }) => {
+      maps?.event.removeListener(marker, "click", clickHandler);
+      marker.setMap(null);
+    });
+    markerRegistryRef.current.clear();
     aggregateOverlaysRef.current.forEach((overlay) => overlay.setMap(null));
+    aggregateOverlaysRef.current = [];
+    locationOverlayRef.current?.setMap(null);
     accuracyCircleRef.current?.setMap(null);
+    focusMarkerRef.current?.setMap(null);
+    labelOverlayRef.current?.setMap(null);
     routePolylineRef.current?.setMap(null);
-  }, []);
+    mapInstanceRef.current = null;
+  }, [reportViewport]);
 
   useEffect(() => {
     if (!mapReady || !mapInstanceRef.current || !window.kakao) return;
@@ -366,20 +541,27 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
 
     const nextIds = new Set<string>();
     facilities.forEach((facility) => nextIds.add(facility.id));
-    const removed: KakaoMarkerInstance[] = [];
+    const removed: MarkerEntry[] = [];
     markerRegistryRef.current.forEach((entry, id) => {
       if (nextIds.has(id)) return;
-      removed.push(entry.marker);
+      removed.push(entry);
       markerRegistryRef.current.delete(id);
     });
     if (removed.length) {
-      removed.forEach((marker) => marker.setMap(null));
+      removed.forEach(({ marker, clickHandler }) => {
+        maps.event.removeListener(marker, "click", clickHandler);
+        marker.setMap(null);
+      });
     }
 
     const pending: Facility[] = [];
     for (const facility of facilities) {
       const existing = markerRegistryRef.current.get(facility.id);
       if (existing) {
+        if (existing.facility.coordinates.latitude !== facility.coordinates.latitude || existing.facility.coordinates.longitude !== facility.coordinates.longitude) {
+          existing.marker.setPosition(new maps.LatLng(facility.coordinates.latitude, facility.coordinates.longitude));
+        }
+        if (existing.facility.name !== facility.name) existing.marker.setTitle(facility.name);
         existing.facility = facility;
         const categoryId = getPrimaryCategory(facility).id;
         if (existing.categoryId !== categoryId) {
@@ -416,11 +598,12 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
           image,
         });
         const facilityId = facility.id;
-        markerRegistryRef.current.set(facilityId, { facility, marker, categoryId });
-        maps.event.addListener(marker, "click", () => {
+        const clickHandler = () => {
           const current = markerRegistryRef.current.get(facilityId);
           if (current) selectRef.current(current.facility);
-        });
+        };
+        markerRegistryRef.current.set(facilityId, { facility, marker, categoryId, clickHandler });
+        maps.event.addListener(marker, "click", clickHandler);
         added.push(marker);
       }
       added.forEach((marker) => marker.setMap(map));
@@ -463,7 +646,7 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
   useEffect(() => {
     locationOverlayRef.current?.setMap(null);
     accuracyCircleRef.current?.setMap(null);
-    if (!mapReady || !mapInstanceRef.current || !window.kakao || !userLocation) return;
+    if (!mapReady || !mapInstanceRef.current || !window.kakao || !validMapPoint(userLocation)) return;
     const maps = window.kakao.maps;
     const position = new maps.LatLng(userLocation.latitude, userLocation.longitude);
     locationOverlayRef.current = new maps.CustomOverlay({
@@ -493,7 +676,8 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
     routePolylineRef.current = null;
     if (!mapReady || !mapInstanceRef.current || !window.kakao || routePath.length < 2) return;
     const maps = window.kakao.maps;
-    const path = routePath.map((point) => new maps.LatLng(point.latitude, point.longitude));
+    const path = routePath.filter(validMapPoint).map((point) => new maps.LatLng(point.latitude, point.longitude));
+    if (path.length < 2) return;
     routePolylineRef.current = new maps.Polyline({
       map: mapInstanceRef.current,
       path,
@@ -512,7 +696,7 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
     focusMarkerRef.current?.setMap(null);
     if (!mapReady || !mapInstanceRef.current || !window.kakao) return;
     const maps = window.kakao.maps;
-    if (focusedPlace) {
+    if (validMapPoint(focusedPlace)) {
       const position = new maps.LatLng(focusedPlace.latitude, focusedPlace.longitude);
       const image = new maps.MarkerImage(placeMarkerSource(), new maps.Size(40, 46), { offset: new maps.Point(20, 44) });
       focusMarkerRef.current = new maps.Marker({ map: mapInstanceRef.current, position, title: focusedPlace.title, image });
@@ -627,21 +811,28 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
           if (!resolved) reject(new Error("GEOLOCATION_DENIED"));
         };
 
-        navigator.geolocation.getCurrentPosition((position) => update(position, false), fail, {
-          enableHighAccuracy: false,
-          timeout: 1500,
-          maximumAge: 300_000,
-        });
-        navigator.geolocation.getCurrentPosition((position) => update(position, false), fail, {
-          enableHighAccuracy: false,
-          timeout: 6000,
-          maximumAge: 0,
-        });
-        locationWatchRef.current = navigator.geolocation.watchPosition((position) => update(position, true), fail, {
-          enableHighAccuracy: true,
-          timeout: 15_000,
-          maximumAge: 0,
-        });
+        try {
+          navigator.geolocation.getCurrentPosition((position) => update(position, false), fail, {
+            enableHighAccuracy: false,
+            timeout: 1500,
+            maximumAge: 300_000,
+          });
+          navigator.geolocation.getCurrentPosition((position) => update(position, false), fail, {
+            enableHighAccuracy: false,
+            timeout: 6000,
+            maximumAge: 0,
+          });
+          locationWatchRef.current = navigator.geolocation.watchPosition((position) => update(position, true), fail, {
+            enableHighAccuracy: true,
+            timeout: 15_000,
+            maximumAge: 0,
+          });
+        } catch {
+          locationGenerationRef.current += 1;
+          stop();
+          if (!resolved) reject(new Error("GEOLOCATION_UNAVAILABLE"));
+          return;
+        }
         locationStopTimerRef.current = window.setTimeout(() => {
           if (generation !== locationGenerationRef.current) return;
           stop();
@@ -650,7 +841,7 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
       });
     },
     moveTo(point, level = 4) {
-      if (!mapInstanceRef.current || !window.kakao) return;
+      if (!mapInstanceRef.current || !window.kakao || !validMapPoint(point)) return;
       mapInstanceRef.current.panTo(new window.kakao.maps.LatLng(point.latitude, point.longitude));
       mapInstanceRef.current.setLevel(level, { animate: { duration: 180 } });
     },
@@ -683,10 +874,10 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
           <div className="rounded-2xl bg-white/95 px-5 py-4 text-center shadow-lg">
             {appKey && !scriptFailed ? <LoaderCircle className="mx-auto size-5 animate-spin text-[var(--brand)]" /> : <MapPin className="mx-auto size-5 text-amber-500" />}
             <p className="mt-2 text-[12px] font-bold text-[var(--sub)]">{loadMessage}</p>
+            {appKey && scriptFailed && <button type="button" onClick={() => setLoadAttempt((attempt) => attempt + 1)} className="mt-3 rounded-lg border border-[var(--line)] bg-white px-3 py-2 text-[10px] font-extrabold text-[var(--ink)]">다시 시도</button>}
           </div>
         </div>
       )}
-      {appKey && !scriptFailed && <Script id="kakao-map-sdk" src={`https://dapi.kakao.com/v2/maps/sdk.js?appkey=${appKey}&autoload=false`} strategy="afterInteractive" onReady={initializeMap} onError={() => setScriptFailed(true)} />}
     </div>
   );
 });

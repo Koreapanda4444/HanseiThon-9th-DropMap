@@ -7,5 +7,9 @@ export default async function ReportPage({ searchParams }: {
   searchParams: Promise<{ facilityId?: string }>;
 }) {
   const { facilityId } = await searchParams;
-  return <ReportExperience initialFacilityId={facilityId && /^\d+$/.test(facilityId) ? facilityId : null} />;
+  const numericId = Number(facilityId);
+  const validFacilityId = facilityId && /^\d+$/.test(facilityId) && Number.isSafeInteger(numericId) && numericId > 0
+    ? facilityId
+    : null;
+  return <ReportExperience initialFacilityId={validFacilityId} />;
 }

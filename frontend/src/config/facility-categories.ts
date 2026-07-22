@@ -7,7 +7,6 @@ export const FACILITY_CATEGORIES: FacilityCategory[] = [
   { id: "battery", label: "폐건전지·형광등 수거함", shortLabel: "건전지·형광등", color: "#f97316", softColor: "#fff0e5" },
   { id: "clothes", label: "의류 수거함", shortLabel: "의류", color: "#d97706", softColor: "#fff7df" },
   { id: "cigarette", label: "담배꽁초 수거함", shortLabel: "꽁초", color: "#64748b", softColor: "#eef2f6" },
-  { id: "electronics", label: "중소형 폐가전 수거함", shortLabel: "폐가전", color: "#0b78d0", softColor: "#e8f4ff" },
 ];
 
 export const CATEGORY_BY_ID = Object.fromEntries(

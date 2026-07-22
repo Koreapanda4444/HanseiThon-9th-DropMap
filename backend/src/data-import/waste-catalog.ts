@@ -78,11 +78,4 @@ export const wasteCatalog = [
     categoryId: "cigarette",
     disposalTip: "불씨를 완전히 끈 뒤 담배꽁초 전용 수거함이나 지정된 일반쓰레기 수거함에 배출해 주세요.",
   },
-  {
-    id: "small-electronics",
-    name: "중소형 폐가전",
-    aliases: ["소형가전", "폐가전", "전자제품", "전기제품", "선풍기", "청소기", "프린터"],
-    categoryId: "electronics",
-    disposalTip: "배터리를 분리할 수 있다면 따로 분리하고 중소형 폐가전 수거함이나 지역 무상수거 서비스를 이용해 주세요.",
-  },
 ] satisfies WasteItem[];

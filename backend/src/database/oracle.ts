@@ -5,9 +5,8 @@ import { AppError } from "../errors.js";
 oracledb.outFormat = oracledb.OUT_FORMAT_OBJECT;
 
 let pool: Pool | null = null;
-let connectionState: "unconfigured" | "disconnected" | "connected" = oracleConfigured
-  ? "disconnected"
-  : "unconfigured";
+let poolPromise: Promise<Pool> | null = null;
+let closingPromise: Promise<void> | null = null;
 
 async function createPool() {
   if (!oracleConfigured) {
@@ -18,7 +17,7 @@ async function createPool() {
     );
   }
 
-  pool = await oracledb.createPool({
+  return oracledb.createPool({
     user: env.ORACLE_USER,
     password: env.ORACLE_PASSWORD,
     connectString: oracleConnectString,
@@ -27,18 +26,22 @@ async function createPool() {
     poolIncrement: env.ORACLE_POOL_INCREMENT,
     queueTimeout: 5000,
   });
-  connectionState = "connected";
-  return pool;
 }
 
 async function getPool() {
+  if (closingPromise) await closingPromise;
   if (pool) return pool;
+  const pending = poolPromise ?? createPool();
+  poolPromise = pending;
   try {
-    return await createPool();
+    const created = await pending;
+    pool = created;
+    return created;
   } catch (error) {
     if (error instanceof AppError) throw error;
-    connectionState = "disconnected";
     throw new AppError("현재 데이터를 불러오지 못했습니다.", 503, "DATABASE_UNAVAILABLE");
+  } finally {
+    if (poolPromise === pending) poolPromise = null;
   }
 }
 
@@ -63,14 +66,23 @@ export async function checkDatabase() {
     });
     return { configured: true, connected: true, state: "connected" as const };
   } catch {
-    connectionState = "disconnected";
     return { configured: true, connected: false, state: "disconnected" as const };
   }
 }
 
 export async function closeDatabase() {
-  if (!pool) return;
-  await pool.close(10);
-  pool = null;
-  connectionState = oracleConfigured ? "disconnected" : "unconfigured";
+  if (closingPromise) return closingPromise;
+  const task = (async () => {
+    const pending = poolPromise;
+    if (pending) await pending.catch(() => undefined);
+    const activePool = pool;
+    pool = null;
+    if (activePool) await activePool.close(10);
+  })();
+  closingPromise = task;
+  try {
+    await task;
+  } finally {
+    if (closingPromise === task) closingPromise = null;
+  }
 }

@@ -52,20 +52,33 @@ async function findOracleAccountByEmail(email: string) {
   });
 }
 
-async function createOracleAccount(account: AccountCredential) {
+async function createOracleAccountWithSession(
+  account: AccountCredential,
+  tokenHash: string,
+  expiresAt: string,
+) {
   try {
     await withConnection(async (connection) => {
-      await connection.execute(`
-        INSERT INTO users (id, email, display_name, password_hash, created_at, updated_at)
-        VALUES (:id, :email, :name, :passwordHash, :createdAt, :createdAt)
-      `, {
-        id: account.id,
-        email: account.email,
-        name: account.name,
-        passwordHash: account.passwordHash,
-        createdAt: new Date(account.createdAt),
-      });
-      await connection.commit();
+      try {
+        await connection.execute(`
+          INSERT INTO users (id, email, display_name, password_hash, created_at, updated_at)
+          VALUES (:id, :email, :name, :passwordHash, :createdAt, :createdAt)
+        `, {
+          id: account.id,
+          email: account.email,
+          name: account.name,
+          passwordHash: account.passwordHash,
+          createdAt: new Date(account.createdAt),
+        });
+        await connection.execute(`
+          INSERT INTO auth_sessions (token_hash, user_id, expires_at)
+          VALUES (:tokenHash, :userId, :expiresAt)
+        `, { tokenHash, userId: account.id, expiresAt: new Date(expiresAt) });
+        await connection.commit();
+      } catch (error) {
+        await connection.rollback().catch(() => undefined);
+        throw error;
+      }
     });
     return publicAccount(account);
   } catch (error) {
@@ -151,12 +164,22 @@ function findLocalAccountByEmail(email: string) {
   });
 }
 
-function createLocalAccount(account: AccountCredential) {
+function createLocalAccountWithSession(
+  account: AccountCredential,
+  tokenHash: string,
+  expiresAt: string,
+) {
   return mutateLocalAccountData((data) => {
     if (data.accounts.some((item) => item.email === account.email)) {
       throw new AppError("이미 사용 중인 이메일입니다.", 409, "EMAIL_ALREADY_USED");
     }
     data.accounts.push({ ...account });
+    data.sessions.push({
+      tokenHash,
+      userId: account.id,
+      expiresAt,
+      createdAt: new Date().toISOString(),
+    });
     return publicAccount(account);
   });
 }
@@ -213,10 +236,14 @@ export function findAccountByEmail(email: string) {
   );
 }
 
-export function createAccount(account: AccountCredential) {
+export function createAccountWithSession(
+  account: AccountCredential,
+  tokenHash: string,
+  expiresAt: string,
+) {
   return runWithDataSource(
-    () => createOracleAccount(account),
-    () => createLocalAccount(account),
+    () => createOracleAccountWithSession(account, tokenHash, expiresAt),
+    () => createLocalAccountWithSession(account, tokenHash, expiresAt),
   );
 }
 

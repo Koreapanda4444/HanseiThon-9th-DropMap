@@ -7,6 +7,7 @@ import {
 } from "../data-import/local-store.js";
 import { withConnection } from "../database/oracle.js";
 import { facilityCategoryIds, type Facility, type FacilityCategoryId, type FacilityStatus } from "../domain.js";
+import { AppError } from "../errors.js";
 import { runWithDataSource } from "../services/data-source.js";
 import type { FacilityClusterFilters } from "../services/facility-cluster-service.js";
 
@@ -299,6 +300,9 @@ async function findOracleFacilityClusters(filters: FacilityClusterFilters) {
 }
 
 export function findFacilities(filters: FacilityFilters) {
+  if (filters.limit !== undefined && (!Number.isSafeInteger(filters.limit) || filters.limit < 1 || filters.limit > 50_000)) {
+    throw new AppError("조회 개수가 올바르지 않습니다.", 400, "INVALID_LIMIT");
+  }
   return runWithDataSource(
     () => findOracleFacilities(filters),
     () => findLocalFacilities(filters),
@@ -325,8 +329,11 @@ export function findFacilityClusters(filters: FacilityClusterFilters) {
     const oldestKey = facilityClusterCache.keys().next().value;
     if (oldestKey !== undefined) facilityClusterCache.delete(oldestKey);
   }
-  facilityClusterCache.set(key, { expiresAt: Date.now() + 20_000, value });
-  void value.catch(() => facilityClusterCache.delete(key));
+  const entry = { expiresAt: Date.now() + 20_000, value };
+  facilityClusterCache.set(key, entry);
+  void value.catch(() => {
+    if (facilityClusterCache.get(key) === entry) facilityClusterCache.delete(key);
+  });
   return value;
 }
 

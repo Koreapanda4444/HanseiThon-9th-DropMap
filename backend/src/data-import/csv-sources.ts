@@ -1,7 +1,8 @@
 import { access, readFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { parse } from "csv-parse/sync";
+import { env } from "../config/env.js";
 import type { FacilityCategoryId, FacilityStatus } from "../domain.js";
 import {
   categoriesFromText,
@@ -257,6 +258,8 @@ export const csvSourceDefinitions: CsvSourceDefinition[] = [
   },
 ];
 
+const backendDataDirectory = fileURLToPath(new URL("../../data", import.meta.url));
+
 async function containsAllCsvFiles(directory: string) {
   try {
     await Promise.all(csvSourceDefinitions.map((source) => access(join(directory, source.fileName))));
@@ -269,10 +272,8 @@ async function containsAllCsvFiles(directory: string) {
 export async function resolveCsvDirectory(requestedDirectory?: string) {
   const candidates = uniqueText([
     requestedDirectory ?? "",
-    process.env.IMPORT_CSV_DIR ?? "",
-    resolve(process.cwd(), "data"),
-    resolve(process.cwd(), "backend", "data"),
-    join(homedir(), "Downloads"),
+    env.IMPORT_CSV_DIR ?? "",
+    backendDataDirectory,
   ], 10, 1000);
   for (const candidate of candidates) {
     const directory = resolve(candidate);

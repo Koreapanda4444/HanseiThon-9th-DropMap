@@ -1,6 +1,7 @@
 import { withConnection } from "../database/oracle.js";
 import { classifyLocalWaste, findLocalWasteItems } from "../data-import/local-store.js";
 import { facilityCategoryIds, type ClassificationResult, type FacilityCategoryId, type WasteItem } from "../domain.js";
+import { AppError } from "../errors.js";
 import { runWithDataSource } from "../services/data-source.js";
 
 interface WasteItemRow {
@@ -114,6 +115,9 @@ async function classifyOracleWaste(query: string) {
 }
 
 export function findWasteItems(query?: string, limit = 100) {
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 200) {
+    throw new AppError("조회 개수가 올바르지 않습니다.", 400, "INVALID_LIMIT");
+  }
   return runWithDataSource(
     () => findOracleWasteItems(query, limit),
     () => findLocalWasteItems(query, limit),

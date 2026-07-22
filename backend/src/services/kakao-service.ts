@@ -1,137 +1,157 @@
+import { isIP } from "node:net";
+import { z } from "zod";
 import { env } from "../config/env.js";
 import { AppError } from "../errors.js";
+import { readLimitedResponseText } from "./http-response.js";
 
-interface KakaoAddressDocument {
-  address_name: string;
-  x: string;
-  y: string;
-  address?: {
-    address_name?: string;
-  } | null;
-  road_address?: {
-    address_name?: string;
-  } | null;
-}
-
-interface KakaoAddressResponse {
-  documents?: KakaoAddressDocument[];
-}
-
-interface KakaoKeywordDocument {
-  id: string;
-  place_name: string;
-  category_name: string;
-  category_group_name: string;
-  phone: string;
-  address_name: string;
-  road_address_name: string;
-  x: string;
-  y: string;
-  distance: string;
-  place_url: string;
-}
-
-interface KakaoKeywordResponse {
-  documents?: KakaoKeywordDocument[];
-}
-
-interface KakaoImageDocument {
-  thumbnail_url: string;
-  image_url: string;
-  display_sitename: string;
-  doc_url: string;
-}
-
-interface KakaoImageResponse {
-  documents?: KakaoImageDocument[];
-}
+const shortText = z.string().max(500);
+const coordinateText = z.string().max(40);
+const kakaoAddressResponseSchema = z.object({
+  documents: z.array(z.object({
+    address_name: shortText,
+    x: coordinateText,
+    y: coordinateText,
+    address: z.object({ address_name: shortText.optional() }).nullable().optional(),
+    road_address: z.object({ address_name: shortText.optional() }).nullable().optional(),
+  })).max(30).default([]),
+});
+const kakaoKeywordResponseSchema = z.object({
+  documents: z.array(z.object({
+    id: z.string().max(100),
+    place_name: shortText,
+    category_name: shortText.default(""),
+    category_group_name: shortText.default(""),
+    phone: z.string().max(100).default(""),
+    address_name: shortText.default(""),
+    road_address_name: shortText.default(""),
+    x: coordinateText,
+    y: coordinateText,
+    distance: coordinateText.default(""),
+    place_url: z.string().max(2000).default(""),
+  })).max(15).default([]),
+});
+const kakaoImageResponseSchema = z.object({
+  documents: z.array(z.object({
+    thumbnail_url: z.string().max(4000).default(""),
+    image_url: z.string().max(4000).default(""),
+    display_sitename: shortText.default(""),
+    doc_url: z.string().max(4000).default(""),
+  })).max(1).default([]),
+});
 
 interface RouteCoordinate {
   latitude: number;
   longitude: number;
 }
 
-function safeHttpUrl(value: string) {
+function safeHttpsUrl(value: string) {
   if (!value) return null;
   try {
     const url = new URL(value);
-    return ["http:", "https:"].includes(url.protocol) ? url.toString() : null;
+    if (url.username || url.password) return null;
+    if (url.protocol === "http:") url.protocol = "https:";
+    const hostname = url.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+    if (url.protocol !== "https:" || (url.port && url.port !== "443")) return null;
+    if (hostname === "localhost" || hostname.endsWith(".localhost") || hostname.endsWith(".local") || isIP(hostname)) return null;
+    return url.toString();
   } catch {
     return null;
   }
 }
 
-interface KakaoDirectionsResponse {
-  routes?: Array<{
-    result_code?: number;
-    result_msg?: string;
-    summary?: {
-      distance?: number;
-      duration?: number;
-      fare?: {
-        taxi?: number;
-        toll?: number;
-      };
-    };
-    sections?: Array<{
-      roads?: Array<{
-        vertexes?: number[];
-      }>;
-      guides?: Array<{
-        name?: string;
-        x?: number;
-        y?: number;
-        distance?: number;
-        duration?: number;
-        guidance?: string;
-      }>;
-    }>;
-  }>;
+const finiteNumber = z.number().finite();
+const kakaoDirectionsResponseSchema = z.object({
+  routes: z.array(z.object({
+    result_code: z.number().int().optional(),
+    result_msg: shortText.optional(),
+    summary: z.object({
+      distance: finiteNumber.optional(),
+      duration: finiteNumber.optional(),
+      fare: z.object({
+        taxi: finiteNumber.optional(),
+        toll: finiteNumber.optional(),
+      }).optional(),
+    }).optional(),
+    sections: z.array(z.object({
+      roads: z.array(z.object({
+        vertexes: z.array(finiteNumber).max(250_000).optional(),
+      })).max(10_000).optional(),
+      guides: z.array(z.object({
+        name: shortText.optional(),
+        x: finiteNumber.optional(),
+        y: finiteNumber.optional(),
+        distance: finiteNumber.optional(),
+        duration: finiteNumber.optional(),
+        guidance: z.string().max(1000).optional(),
+      })).max(5000).optional(),
+    })).max(100).optional(),
+  })).max(10).default([]),
+});
+
+function kakaoUnavailable(message: string, code: string) {
+  return new AppError(message, 502, code);
 }
 
-function segmentDistanceSquared(point: RouteCoordinate, start: RouteCoordinate, end: RouteCoordinate) {
-  let x = start.longitude;
-  let y = start.latitude;
-  let dx = end.longitude - x;
-  let dy = end.latitude - y;
-  if (dx || dy) {
-    const ratio = ((point.longitude - x) * dx + (point.latitude - y) * dy) / (dx * dx + dy * dy);
-    if (ratio > 1) {
-      x = end.longitude;
-      y = end.latitude;
-    } else if (ratio > 0) {
-      x += dx * ratio;
-      y += dy * ratio;
-    }
+async function requestKakao(url: URL, timeout: number, message: string, code: string) {
+  try {
+    const response = await fetch(url, {
+      headers: { Authorization: `KakaoAK ${env.KAKAO_REST_API_KEY}` },
+      signal: AbortSignal.timeout(timeout),
+      redirect: "error",
+    });
+    if (!response.ok) throw kakaoUnavailable(message, code);
+    return response;
+  } catch (error) {
+    if (error instanceof AppError) throw error;
+    throw kakaoUnavailable(message, code);
   }
-  dx = point.longitude - x;
-  dy = point.latitude - y;
-  return dx * dx + dy * dy;
 }
 
-function simplifyRoute(points: RouteCoordinate[], tolerance = 0.000015) {
-  if (points.length <= 2) return points;
-  const marked = new Uint8Array(points.length);
-  const stack: Array<[number, number]> = [[0, points.length - 1]];
-  const threshold = tolerance * tolerance;
-  marked[0] = 1;
-  marked[points.length - 1] = 1;
-  while (stack.length) {
-    const [first, last] = stack.pop() as [number, number];
-    let index = 0;
-    let maximum = threshold;
-    for (let cursor = first + 1; cursor < last; cursor += 1) {
-      const distance = segmentDistanceSquared(points[cursor]!, points[first]!, points[last]!);
-      if (distance > maximum) {
-        index = cursor;
-        maximum = distance;
-      }
-    }
-    if (!index) continue;
-    marked[index] = 1;
-    stack.push([first, index], [index, last]);
+async function readJson<T>(
+  response: Response,
+  schema: z.ZodType<T>,
+  maximumBytes: number,
+  message: string,
+  code: string,
+) {
+  let text: string;
+  try {
+    text = await readLimitedResponseText(response, maximumBytes);
+  } catch {
+    throw kakaoUnavailable(message, code);
   }
-  return points.filter((_, index) => marked[index]);
+  let payload: unknown;
+  try {
+    payload = JSON.parse(text);
+  } catch {
+    throw kakaoUnavailable(message, code);
+  }
+  const parsed = schema.safeParse(payload);
+  if (!parsed.success) throw kakaoUnavailable(message, code);
+  return parsed.data;
+}
+
+function coordinates(latitudeValue: string | number, longitudeValue: string | number) {
+  const latitude = Number(latitudeValue);
+  const longitude = Number(longitudeValue);
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
+  if (latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) return null;
+  return { latitude, longitude };
+}
+
+function nonnegativeNumber(value: string | number | undefined) {
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 ? number : null;
+}
+
+function routePointsForResponse(points: RouteCoordinate[]) {
+  const maximumPoints = 12_000;
+  if (points.length <= maximumPoints) return points;
+  const sampled = Array.from({ length: maximumPoints }, (_, index) => {
+    const sourceIndex = Math.round(index * (points.length - 1) / (maximumPoints - 1));
+    return points[sourceIndex]!;
+  });
+  return sampled;
 }
 
 export async function geocodeAddress(query: string) {
@@ -141,24 +161,18 @@ export async function geocodeAddress(query: string) {
 
   const url = new URL("https://dapi.kakao.com/v2/local/search/address.json");
   url.searchParams.set("query", query);
-  const response = await fetch(url, {
-    headers: { Authorization: `KakaoAK ${env.KAKAO_REST_API_KEY}` },
-    signal: AbortSignal.timeout(7000),
-    redirect: "error",
+  const message = "주소를 좌표로 변환하지 못했습니다.";
+  const response = await requestKakao(url, 7000, message, "KAKAO_REQUEST_FAILED");
+  const data = await readJson(response, kakaoAddressResponseSchema, 512 * 1024, message, "KAKAO_RESPONSE_INVALID");
+  return data.documents.flatMap((document) => {
+    const point = coordinates(document.y, document.x);
+    return point ? [{
+      address: document.address_name,
+      roadAddress: document.road_address?.address_name ?? null,
+      lotAddress: document.address?.address_name ?? null,
+      ...point,
+    }] : [];
   });
-
-  if (!response.ok) {
-    throw new AppError("주소를 좌표로 변환하지 못했습니다.", 502, "KAKAO_REQUEST_FAILED");
-  }
-
-  const data = await response.json() as KakaoAddressResponse;
-  return (data.documents ?? []).map((document) => ({
-    address: document.address_name,
-    roadAddress: document.road_address?.address_name ?? null,
-    lotAddress: document.address?.address_name ?? null,
-    latitude: Number(document.y),
-    longitude: Number(document.x),
-  }));
 }
 
 export async function searchPlaces(query: string, latitude?: number, longitude?: number, limit = 15) {
@@ -173,32 +187,25 @@ export async function searchPlaces(query: string, latitude?: number, longitude?:
     url.searchParams.set("y", String(latitude));
     url.searchParams.set("x", String(longitude));
   }
-  const response = await fetch(url, {
-    headers: { Authorization: `KakaoAK ${env.KAKAO_REST_API_KEY}` },
-    signal: AbortSignal.timeout(7000),
-    redirect: "error",
+  const message = "장소 검색 결과를 불러오지 못했습니다.";
+  const response = await requestKakao(url, 7000, message, "KAKAO_REQUEST_FAILED");
+  const data = await readJson(response, kakaoKeywordResponseSchema, 1024 * 1024, message, "KAKAO_RESPONSE_INVALID");
+  return data.documents.flatMap((document) => {
+    const point = coordinates(document.y, document.x);
+    if (!point) return [];
+    return [{
+      id: document.id,
+      name: document.place_name,
+      category: document.category_name,
+      categoryGroup: document.category_group_name,
+      address: document.address_name,
+      roadAddress: document.road_address_name || null,
+      phone: document.phone || null,
+      placeUrl: safeHttpsUrl(document.place_url),
+      distanceM: document.distance ? nonnegativeNumber(document.distance) : null,
+      coordinates: point,
+    }];
   });
-
-  if (!response.ok) {
-    throw new AppError("장소 검색 결과를 불러오지 못했습니다.", 502, "KAKAO_REQUEST_FAILED");
-  }
-
-  const data = await response.json() as KakaoKeywordResponse;
-  return (data.documents ?? []).map((document) => ({
-    id: document.id,
-    name: document.place_name,
-    category: document.category_name,
-    categoryGroup: document.category_group_name,
-    address: document.address_name,
-    roadAddress: document.road_address_name || null,
-    phone: document.phone || null,
-    placeUrl: safeHttpUrl(document.place_url),
-    distanceM: document.distance ? Number(document.distance) : null,
-    coordinates: {
-      latitude: Number(document.y),
-      longitude: Number(document.x),
-    },
-  }));
 }
 
 export async function searchPlaceImage(query: string) {
@@ -209,27 +216,19 @@ export async function searchPlaceImage(query: string) {
   const url = new URL("https://dapi.kakao.com/v2/search/image");
   url.searchParams.set("query", query);
   url.searchParams.set("size", "1");
-  const response = await fetch(url, {
-    headers: { Authorization: `KakaoAK ${env.KAKAO_REST_API_KEY}` },
-    signal: AbortSignal.timeout(7000),
-    redirect: "error",
-  });
-
-  if (!response.ok) {
-    throw new AppError("장소 이미지를 불러오지 못했습니다.", 502, "KAKAO_REQUEST_FAILED");
-  }
-
-  const data = await response.json() as KakaoImageResponse;
-  const image = data.documents?.[0];
+  const message = "장소 이미지를 불러오지 못했습니다.";
+  const response = await requestKakao(url, 7000, message, "KAKAO_REQUEST_FAILED");
+  const data = await readJson(response, kakaoImageResponseSchema, 512 * 1024, message, "KAKAO_RESPONSE_INVALID");
+  const image = data.documents[0];
   if (!image) return null;
-  const thumbnailUrl = safeHttpUrl(image.thumbnail_url);
-  const imageUrl = safeHttpUrl(image.image_url);
+  const thumbnailUrl = safeHttpsUrl(image.thumbnail_url);
+  const imageUrl = safeHttpsUrl(image.image_url);
   if (!thumbnailUrl && !imageUrl) return null;
   return {
     thumbnailUrl: thumbnailUrl ?? imageUrl,
     imageUrl: imageUrl ?? thumbnailUrl,
     sourceName: image.display_sitename || null,
-    sourceUrl: safeHttpUrl(image.doc_url),
+    sourceUrl: safeHttpsUrl(image.doc_url),
   };
 }
 
@@ -237,22 +236,18 @@ export async function getDirections(origin: RouteCoordinate, destination: RouteC
   if (!env.KAKAO_REST_API_KEY) {
     throw new AppError("현재 길찾기를 이용할 수 없습니다.", 503, "KAKAO_NOT_CONFIGURED");
   }
+  if (!coordinates(origin.latitude, origin.longitude) || !coordinates(destination.latitude, destination.longitude)) {
+    throw new AppError("출발지와 목적지 위치를 확인해 주세요.", 400, "DIRECTIONS_COORDINATES_INVALID");
+  }
 
   const url = new URL("https://apis-navi.kakaomobility.com/v1/directions");
   url.searchParams.set("origin", `${origin.longitude},${origin.latitude}`);
   url.searchParams.set("destination", `${destination.longitude},${destination.latitude}`);
   url.searchParams.set("priority", "RECOMMEND");
-  const response = await fetch(url, {
-    headers: { Authorization: `KakaoAK ${env.KAKAO_REST_API_KEY}` },
-    signal: AbortSignal.timeout(12_000),
-    redirect: "error",
-  });
-  if (!response.ok) {
-    throw new AppError("경로를 불러오지 못했습니다.", 502, "DIRECTIONS_REQUEST_FAILED");
-  }
-
-  const data = await response.json() as KakaoDirectionsResponse;
-  const route = data.routes?.[0];
+  const message = "경로를 불러오지 못했습니다.";
+  const response = await requestKakao(url, 12_000, message, "DIRECTIONS_REQUEST_FAILED");
+  const data = await readJson(response, kakaoDirectionsResponseSchema, 8 * 1024 * 1024, message, "DIRECTIONS_INVALID");
+  const route = data.routes[0];
   if (!route || route.result_code !== 0 || !route.summary) {
     throw new AppError("선택한 위치 사이의 경로를 찾지 못했습니다.", 404, "DIRECTIONS_NOT_FOUND");
   }
@@ -265,7 +260,8 @@ export async function getDirections(origin: RouteCoordinate, destination: RouteC
         const longitude = values[index];
         const latitude = values[index + 1];
         if (longitude === undefined || latitude === undefined) continue;
-        const point = { longitude, latitude };
+        const point = coordinates(latitude, longitude);
+        if (!point) continue;
         const previous = points[points.length - 1];
         if (!previous || previous.latitude !== point.latitude || previous.longitude !== point.longitude) points.push(point);
       }
@@ -275,24 +271,21 @@ export async function getDirections(origin: RouteCoordinate, destination: RouteC
     throw new AppError("경로 좌표를 확인하지 못했습니다.", 502, "DIRECTIONS_INVALID");
   }
 
-  const steps = (route.sections ?? []).flatMap((section) => section.guides ?? []).map((guide, index) => ({
+  const steps = (route.sections ?? []).flatMap((section) => section.guides ?? []).slice(0, 500).map((guide, index) => ({
     id: `step-${index + 1}`,
     instruction: guide.guidance || guide.name || "경로를 따라 이동하세요.",
     roadName: guide.name || null,
-    distanceM: Math.max(0, guide.distance ?? 0),
-    durationS: Math.max(0, guide.duration ?? 0),
-    coordinates: {
-      latitude: guide.y ?? points[0]!.latitude,
-      longitude: guide.x ?? points[0]!.longitude,
-    },
+    distanceM: nonnegativeNumber(guide.distance) ?? 0,
+    durationS: nonnegativeNumber(guide.duration) ?? 0,
+    coordinates: coordinates(guide.y ?? points[0]!.latitude, guide.x ?? points[0]!.longitude) ?? points[0]!,
   }));
 
   return {
-    distanceM: Math.max(0, route.summary.distance ?? 0),
-    durationS: Math.max(0, route.summary.duration ?? 0),
-    taxiFare: Math.max(0, route.summary.fare?.taxi ?? 0),
-    tollFare: Math.max(0, route.summary.fare?.toll ?? 0),
-    points: simplifyRoute(points),
+    distanceM: nonnegativeNumber(route.summary.distance) ?? 0,
+    durationS: nonnegativeNumber(route.summary.duration) ?? 0,
+    taxiFare: nonnegativeNumber(route.summary.fare?.taxi) ?? 0,
+    tollFare: nonnegativeNumber(route.summary.fare?.toll) ?? 0,
+    points: routePointsForResponse(points),
     steps,
   };
 }

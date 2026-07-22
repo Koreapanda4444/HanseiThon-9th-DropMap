@@ -3,20 +3,18 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { reportTypes } from "../domain.js";
 import { AppError } from "../errors.js";
-import { findFacilityById } from "../repositories/facility-repository.js";
+import { findFacilities, findFacilityById } from "../repositories/facility-repository.js";
 import { createReport, listReports } from "../repositories/report-repository.js";
 import { requireAccount } from "../services/auth-service.js";
 
 const reportSchema = z.object({
-  facilityId: z.coerce.number().int().positive(),
+  facilityId: z.preprocess(
+    (value) => typeof value === "string" && /^\d+$/.test(value) ? Number(value) : value,
+    z.number().int().positive().safe(),
+  ),
   reportType: z.enum(reportTypes),
   content: z.string().trim().min(5).max(1000),
 }).strict();
-
-async function withFacilityName(report: Awaited<ReturnType<typeof createReport>>) {
-  const facility = await findFacilityById(Number(report.facilityId));
-  return { ...report, facilityName: facility?.name ?? "등록 시설" };
-}
 
 export async function reportRoutes(app: FastifyInstance) {
   app.post("/api/reports", { config: { rateLimit: { max: 10, timeWindow: "1 hour" } } }, async (request, reply) => {
@@ -41,6 +39,14 @@ export async function reportRoutes(app: FastifyInstance) {
   app.get("/api/reports", { config: { rateLimit: { max: 60, timeWindow: "1 minute" } } }, async (request) => {
     const account = await requireAccount(request);
     const reports = await listReports(account.id);
-    return { reports: await Promise.all(reports.map(withFacilityName)) };
+    const facilityIds = [...new Set(reports.map((report) => report.facilityId))];
+    const facilities = facilityIds.length ? await findFacilities({ ids: facilityIds }) : [];
+    const facilityNames = new Map(facilities.map((facility) => [facility.id, facility.name]));
+    return {
+      reports: reports.map((report) => ({
+        ...report,
+        facilityName: facilityNames.get(report.facilityId) ?? "등록 시설",
+      })),
+    };
   });
 }

@@ -6,13 +6,22 @@ import { initializeDataSource } from "./services/data-source.js";
 await initializeDataSource();
 const app = await buildApp();
 
-async function shutdown() {
-  await app.close();
-  await closeDatabase();
-  process.exit(0);
+let shutdownPromise: Promise<void> | null = null;
+
+function shutdown(signal: string) {
+  shutdownPromise ??= (async () => {
+    try {
+      await app.close();
+      await closeDatabase();
+    } catch (error) {
+      process.exitCode = 1;
+      app.log.error({ err: error, signal }, "shutdown failed");
+    }
+  })();
+  return shutdownPromise;
 }
 
-process.on("SIGINT", shutdown);
-process.on("SIGTERM", shutdown);
+process.once("SIGINT", () => void shutdown("SIGINT"));
+process.once("SIGTERM", () => void shutdown("SIGTERM"));
 
 await app.listen({ host: env.HOST, port: env.PORT });

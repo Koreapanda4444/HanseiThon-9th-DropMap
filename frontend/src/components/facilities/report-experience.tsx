@@ -17,6 +17,7 @@ import {
   submitReport,
 } from "@/lib/api";
 import { cn, formatDateTime } from "@/lib/utils";
+import { useDebouncedValue } from "@/lib/use-debounced-value";
 import type { Facility, ReportType, UserReport } from "@/types/domain";
 
 const STATUS_LABELS: Record<UserReport["status"], string> = {
@@ -41,7 +42,7 @@ function FacilitySearchResult({ facility, onSelect }: { facility: Facility; onSe
 
 export function ReportExperience({ initialFacilityId }: { initialFacilityId: string | null }) {
   const queryClient = useQueryClient();
-  const accountQuery = useQuery({ queryKey: ["auth", "me"], queryFn: fetchCurrentAccount, retry: false, staleTime: 60_000 });
+  const accountQuery = useQuery({ queryKey: ["auth", "me"], queryFn: ({ signal }) => fetchCurrentAccount(signal), retry: false, staleTime: 60_000 });
   const [facilitySearch, setFacilitySearch] = useState("");
   const [selectedFacility, setSelectedFacility] = useState<Facility | null>(null);
   const [linkedFacilityDismissed, setLinkedFacilityDismissed] = useState(false);
@@ -49,24 +50,26 @@ export function ReportExperience({ initialFacilityId }: { initialFacilityId: str
   const [content, setContent] = useState("");
   const [submitted, setSubmitted] = useState(false);
   const isAuthenticated = Boolean(accountQuery.data);
+  const facilityQueryText = useDebouncedValue(facilitySearch.trim(), 220);
+  const facilityResultsReady = facilityQueryText === facilitySearch.trim();
 
   const linkedFacilityQuery = useQuery({
     queryKey: ["facility", initialFacilityId],
-    queryFn: () => fetchFacility(initialFacilityId as string),
+    queryFn: ({ signal }) => fetchFacility(initialFacilityId as string, signal),
     enabled: Boolean(initialFacilityId && !linkedFacilityDismissed),
     retry: false,
   });
   const activeFacility = selectedFacility ?? (!linkedFacilityDismissed ? linkedFacilityQuery.data ?? null : null);
 
   const facilityResultsQuery = useQuery({
-    queryKey: ["report-facilities", facilitySearch.trim()],
-    queryFn: () => fetchFacilities({ query: facilitySearch.trim(), limit: 20 }),
-    enabled: Boolean(isAuthenticated && !activeFacility && facilitySearch.trim().length >= 2),
+    queryKey: ["report-facilities", facilityQueryText],
+    queryFn: ({ signal }) => fetchFacilities({ query: facilityQueryText, limit: 20 }, signal),
+    enabled: Boolean(isAuthenticated && !activeFacility && facilityQueryText.length >= 2),
     staleTime: 30_000,
   });
   const reportsQuery = useQuery({
     queryKey: ["reports"],
-    queryFn: fetchReports,
+    queryFn: ({ signal }) => fetchReports(signal),
     enabled: isAuthenticated,
     retry: false,
   });
@@ -80,7 +83,7 @@ export function ReportExperience({ initialFacilityId }: { initialFacilityId: str
     },
   });
 
-  const reports = useMemo(() => reportsQuery.data ?? [], [reportsQuery.data]);
+  const reports = useMemo(() => isAuthenticated ? reportsQuery.data ?? [] : [], [isAuthenticated, reportsQuery.data]);
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -117,11 +120,11 @@ export function ReportExperience({ initialFacilityId }: { initialFacilityId: str
                 </div>
               ) : (
                 <div className="mt-3 overflow-hidden rounded-2xl border border-[var(--line)]">
-                  <label className="flex h-13 items-center gap-2.5 px-4"><Search className="size-5 text-[var(--faint)]" /><input value={facilitySearch} onChange={(event) => setFacilitySearch(event.target.value)} className="min-w-0 flex-1 text-[13px] font-medium outline-none placeholder:text-[var(--faint)]" placeholder="시설명이나 주소 검색" aria-label="제보할 시설 검색" /></label>
-                  {facilityResultsQuery.isPending && facilitySearch.trim().length >= 2 && <p className="border-t border-[var(--line-soft)] px-3 py-4 text-[11px] text-[var(--sub)]">검색 중</p>}
-                  {facilityResultsQuery.isError && <p className="border-t border-[var(--line-soft)] px-3 py-4 text-[11px] text-rose-600">시설을 불러오지 못했습니다.</p>}
-                  {facilityResultsQuery.data?.map((facility) => <FacilitySearchResult key={facility.id} facility={facility} onSelect={(item) => { setSelectedFacility(item); setLinkedFacilityDismissed(true); setFacilitySearch(""); }} />)}
-                  {facilityResultsQuery.data?.length === 0 && <p className="border-t border-[var(--line-soft)] px-3 py-4 text-[11px] text-[var(--sub)]">검색 결과가 없습니다.</p>}
+                  <label className="flex h-13 items-center gap-2.5 px-4"><Search className="size-5 text-[var(--faint)]" /><input value={facilitySearch} onChange={(event) => setFacilitySearch(event.target.value)} maxLength={80} className="min-w-0 flex-1 text-[13px] font-medium outline-none placeholder:text-[var(--faint)]" placeholder="시설명이나 주소 검색" aria-label="제보할 시설 검색" /></label>
+                  {facilitySearch.trim().length >= 2 && (!facilityResultsReady || facilityResultsQuery.isPending) && <p className="border-t border-[var(--line-soft)] px-3 py-4 text-[11px] text-[var(--sub)]">검색 중</p>}
+                  {facilityResultsReady && facilityResultsQuery.isError && <p className="border-t border-[var(--line-soft)] px-3 py-4 text-[11px] text-rose-600">시설을 불러오지 못했습니다.</p>}
+                  {facilityResultsReady && facilityResultsQuery.data?.map((facility) => <FacilitySearchResult key={facility.id} facility={facility} onSelect={(item) => { setSelectedFacility(item); setLinkedFacilityDismissed(true); setFacilitySearch(""); }} />)}
+                  {facilityResultsReady && facilityResultsQuery.data?.length === 0 && <p className="border-t border-[var(--line-soft)] px-3 py-4 text-[11px] text-[var(--sub)]">검색 결과가 없습니다.</p>}
                 </div>
               )}
             </section>

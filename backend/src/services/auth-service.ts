@@ -4,7 +4,7 @@ import { env } from "../config/env.js";
 import type { Account } from "../domain.js";
 import { AppError } from "../errors.js";
 import {
-  createAccount,
+  createAccountWithSession,
   createSession,
   deleteAccount,
   deleteSession,
@@ -93,14 +93,16 @@ export async function register(input: { name: string; email: string; password: s
     throw new AppError("이미 사용 중인 이메일입니다.", 409, "EMAIL_ALREADY_USED");
   }
   const createdAt = new Date().toISOString();
-  const account = await createAccount({
+  const token = randomBytes(32).toString("base64url");
+  const expiresAt = new Date(Date.now() + sessionMaxAgeSeconds * 1000).toISOString();
+  const account = await createAccountWithSession({
     id: randomUUID(),
     email,
     name: input.name.trim(),
     passwordHash: await hashPassword(input.password),
     createdAt,
-  });
-  return { account, token: await issueSession(account.id) };
+  }, tokenHash(token), expiresAt);
+  return { account, token };
 }
 
 export async function login(input: { email: string; password: string }) {

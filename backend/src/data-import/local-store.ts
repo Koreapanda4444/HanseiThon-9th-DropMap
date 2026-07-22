@@ -5,10 +5,8 @@ import type {
 } from "../domain.js";
 import type { FacilityFilters } from "../repositories/facility-repository.js";
 import { aggregateFacilityClusters, type FacilityClusterFilters } from "../services/facility-cluster-service.js";
-import { env } from "../config/env.js";
 import { loadCsvFacilities, resolveCsvDirectory } from "./csv-sources.js";
 import { prepareImport } from "./normalize.js";
-import { loadPublicDataFacilities } from "./public-data.js";
 import { wasteCatalog } from "./waste-catalog.js";
 
 interface LocalSnapshot {
@@ -51,13 +49,6 @@ function isInsideLongitude(longitude: number, west: number, east: number) {
 async function buildSnapshot() {
   const directory = await resolveCsvDirectory();
   const sources = await loadCsvFacilities(directory);
-  if (env.PUBLIC_DATA_SERVICE_KEY) {
-    try {
-      sources.push(await loadPublicDataFacilities(env.PUBLIC_DATA_SERVICE_KEY));
-    } catch (error) {
-      console.error("Public data synchronization failed", error);
-    }
-  }
   const prepared = prepareImport(sources.flatMap((source) => source.records));
   const facilities = prepared.records.map((record, index): Facility => ({
     id: String(index + 1),
