@@ -106,11 +106,27 @@ function makeBaseRecord(input: BaseRecordInput): FacilityImportRecord | string {
 
 function mapTrash(row: CsvRow) {
   const rawType = cleanText(row.휴지통종류, 200);
-  const categoryIds = categoriesFromText(rawType, []);
+  const locationText = [
+    row.설치장소명,
+    row.세부위치,
+    row.소재지도로명주소,
+    row.소재지지번주소,
+  ].map((value) => cleanText(value, 500)).filter(Boolean).join(" ");
+  const categoryIds = categoriesFromText(`${rawType} ${locationText}`, []);
   if (categoryIds.length === 0) categoryIds.push("general");
+  // 완전히 소화한 담배꽁초는 일반폐기물이다. 전용함 데이터가 거의 없는
+  // 공공데이터의 한계를 보완하되, 재활용 전용함은 배출처로 분류하지 않는다.
+  const acceptsExtinguishedCigaretteButts = categoryIds.includes("general")
+    || categoryIds.includes("cigarette");
+  if (acceptsExtinguishedCigaretteButts && !categoryIds.includes("cigarette")) {
+    categoryIds.push("cigarette");
+  }
   const acceptedItems = splitItems(rawType).map((item) => (
     item.includes("재활용") ? "재활용품" : item
   ));
+  if (acceptsExtinguishedCigaretteButts) {
+    acceptedItems.push("불씨를 완전히 끈 담배꽁초");
+  }
   return makeBaseRecord({
     row,
     sourceDataset: "public-trash",
@@ -123,7 +139,9 @@ function mapTrash(row: CsvRow) {
     openingHours: null,
     status: "available",
     statusText: "공공데이터 등록 시설",
-    note: managerNote(row),
+    note: managerNote(row, acceptsExtinguishedCigaretteButts
+      ? ["담배꽁초는 불씨를 완전히 끈 뒤 일반쓰레기 투입구에 배출해 주세요."]
+      : []),
     externalId: "",
   });
 }

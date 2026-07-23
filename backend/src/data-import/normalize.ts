@@ -87,7 +87,7 @@ export function categoriesFromText(text: string, base: FacilityCategoryId[]) {
   if (/재활용/.test(text)) categories.push("recycle");
   if (/의류|헌옷/.test(text)) categories.push("clothes");
   if (/건전지|배터리|전지|형광|LED/.test(text)) categories.push("battery");
-  if (/담배|꽁초/.test(text)) categories.push("cigarette");
+  if (/담배|꽁초|재떨이|흡연/.test(text)) categories.push("cigarette");
   return [...new Set(categories)];
 }
 

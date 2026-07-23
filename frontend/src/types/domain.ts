@@ -121,6 +121,7 @@ export interface DirectionsRoute {
   steps: Array<{
     id: string;
     instruction: string;
+    landmark: string | null;
     roadName: string | null;
     distanceM: number;
     durationS: number;

@@ -74,12 +74,15 @@ const kakaoDirectionsResponseSchema = z.object({
     }).optional(),
     sections: z.array(z.object({
       roads: z.array(z.object({
+        name: shortText.optional(),
         vertexes: z.array(finiteNumber).max(250_000).optional(),
       })).max(10_000).optional(),
       guides: z.array(z.object({
         name: shortText.optional(),
         x: finiteNumber.optional(),
         y: finiteNumber.optional(),
+        type: z.number().int().optional(),
+        road_index: z.number().int().optional(),
         distance: finiteNumber.optional(),
         duration: finiteNumber.optional(),
         guidance: z.string().max(1000).optional(),
@@ -152,6 +155,26 @@ function routePointsForResponse(points: RouteCoordinate[]) {
     return points[sourceIndex]!;
   });
   return sampled;
+}
+
+function contextualGuideInstruction(
+  guide: { guidance?: string | undefined; name?: string | undefined; type?: number | undefined },
+  roadName: string | null,
+) {
+  const guidance = guide.guidance?.trim() ?? "";
+  const landmark = guide.name?.trim() ?? "";
+  if (guide.type === 100) return "경로 안내를 시작합니다.";
+  if (guide.type === 101) return "목적지에 도착했습니다.";
+
+  const maneuver = guidance || landmark || "경로를 따라 이동하세요.";
+  const locationContext = landmark && !maneuver.includes(landmark) ? `${landmark}에서 ` : "";
+  const directionContext = roadName
+    && !maneuver.includes(roadName)
+    && !maneuver.includes("방면")
+    && /(좌회전|우회전|방향|직진|유턴|진입|출구)/.test(maneuver)
+    ? `${roadName} 방면으로 `
+    : "";
+  return `${locationContext}${directionContext}${maneuver}`;
 }
 
 export async function geocodeAddress(query: string) {
@@ -271,10 +294,17 @@ export async function getDirections(origin: RouteCoordinate, destination: RouteC
     throw new AppError("경로 좌표를 확인하지 못했습니다.", 502, "DIRECTIONS_INVALID");
   }
 
-  const steps = (route.sections ?? []).flatMap((section) => section.guides ?? []).slice(0, 500).map((guide, index) => ({
+  const steps = (route.sections ?? []).flatMap((section) => (section.guides ?? []).map((guide) => {
+    const roadIndex = guide.road_index;
+    const rawRoadName = roadIndex !== undefined && roadIndex >= 0 ? section.roads?.[roadIndex]?.name : undefined;
+    const roadName = rawRoadName?.trim() || null;
+    const landmark = guide.name?.trim() || null;
+    return { guide, roadName, landmark };
+  })).slice(0, 500).map(({ guide, roadName, landmark }, index) => ({
     id: `step-${index + 1}`,
-    instruction: guide.guidance || guide.name || "경로를 따라 이동하세요.",
-    roadName: guide.name || null,
+    instruction: contextualGuideInstruction(guide, roadName),
+    landmark,
+    roadName,
     distanceM: nonnegativeNumber(guide.distance) ?? 0,
     durationS: nonnegativeNumber(guide.duration) ?? 0,
     coordinates: coordinates(guide.y ?? points[0]!.latitude, guide.x ?? points[0]!.longitude) ?? points[0]!,
